@@ -361,10 +361,10 @@ func _build_menu() -> void:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 8)
 	centre.add_child(col)
-	var title := _label("PADEL", 54, Color.WHITE)
+	var title := _label("OFF THE GLASS", 50, Color.WHITE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(title)
-	var sub := _label("Doubles · glass walls · golden point", 15, MUTED)
+	var sub := _label("Padel doubles · glass walls · golden point", 15, MUTED)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(sub)
 	var gap := Control.new()

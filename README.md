@@ -1,4 +1,6 @@
-# Padel — Godot 4.6 prototype (iOS, landscape)
+# Padel: Off The Glass — Godot 4.6 (iOS + Android, landscape)
+
+**Store name:** Padel: Off The Glass · **home-screen name:** Off The Glass (`config/name` in Project Settings; iOS truncates labels longer than about 12–13 characters).
 
 First playable slice: a full doubles match against AI, with you and an AI partner (Ana) against two AI rivals.
 
