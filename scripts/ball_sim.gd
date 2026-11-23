@@ -16,12 +16,16 @@ const MESH_TANGENT := 0.5
 
 var pos := Vector3.ZERO
 var vel := Vector3.ZERO
+## -1 = heavy backspin (slice) .. +1 = topspin. Backspin keeps the bounce low
+## and skidding, and makes the ball die off the glass. Halves on every bounce.
+var spin := 0.0
 
 
 func copy() -> BallSim:
 	var s := BallSim.new()
 	s.pos = pos
 	s.vel = vel
+	s.spin = spin
 	return s
 
 
@@ -43,9 +47,12 @@ func step(dt: float) -> Array:
 	# floor
 	if pos.y < RADIUS and vel.y < 0.0:
 		pos.y = RADIUS
-		vel.y = -vel.y * FLOOR_E
-		vel.x *= FLOOR_FRICTION
-		vel.z *= FLOOR_FRICTION
+		# backspin: lower bounce that skids through; topspin: kicks up and slows
+		vel.y = -vel.y * FLOOR_E * (1.0 + 0.45 * spin)
+		var keep := FLOOR_FRICTION + (0.1 if spin < 0.0 else -0.05) * absf(spin)
+		vel.x *= keep
+		vel.z *= keep
+		spin *= 0.5
 		if absf(pos.x) <= Court.HALF_W and absf(pos.z) <= Court.HALF_L:
 			events.append(["floor", pos, ""])
 
@@ -75,6 +82,11 @@ func step(dt: float) -> Array:
 func _reflect(surface: String, axis: Vector3) -> void:
 	var e := GLASS_E if surface == "glass" else MESH_E
 	var keep := GLASS_TANGENT if surface == "glass" else MESH_TANGENT
+	if spin < 0.0:
+		e *= 1.0 + 0.4 * spin      # a slice "dies" off the wall
 	var normal_part := vel * axis
 	var tangent := vel - normal_part
 	vel = tangent * keep - normal_part * e
+	if spin < 0.0:
+		vel.y = minf(vel.y, vel.y * (1.0 + 0.5 * spin))   # and drops off it
+	spin *= 0.6

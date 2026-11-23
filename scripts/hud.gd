@@ -13,6 +13,7 @@ signal online_create(length: String, golden_point: bool)
 signal online_join(code: String)
 signal online_closed
 signal play_ai_instead
+signal training_chosen(drill: String)
 
 const LIME := Color("c6f432")
 const INK := Color("0b1220")
@@ -21,12 +22,26 @@ const MUTED := Color("a9b4c6")
 
 ## Menu entries: id, title, detail.
 const MODES := [
+	["training", "Training", "Learn every shot: drills with a ball machine"],
 	["quick", "Quick match", "One set, first to 4 games · about 5 minutes"],
 	["set", "One set", "First to 6 games, tie-break at 6-6"],
 	["match", "Full match", "Best of three sets"],
-	["practice", "Practice", "Ball machine: groundstrokes, back glass, overheads"],
 	["online", "Play online", "Quick match, or a private game with a friend"],
 ]
+
+## Training drills: id, name. Details (tips, goals) live in main.gd.
+const TRAINING := [
+	["ground", "Groundstrokes"], ["aim", "Aiming"], ["slice", "Slice"],
+	["glass", "Off the back glass"], ["volley", "Volleys at the net"], ["smash", "Power smash"],
+	["mix", "Free practice"],
+]
+
+
+## A quick sideways flick on HIT is a slice; anything with real up/down is an aimed drive.
+static func swipe_kind(aim: Vector2) -> String:
+	if absf(aim.x) >= 0.4 and absf(aim.x) > 1.8 * absf(aim.y):
+		return "slice"
+	return "drive"
 const PRIVATE_LENGTHS := [["quick", "Quick"], ["set", "One set"], ["match", "Full"]]
 
 var safe: Control
@@ -57,6 +72,8 @@ var _pause_menu: Control
 var _quit_btn: Button
 var _names: Array[Label] = []
 
+var _training: Control
+var _training_grid: GridContainer
 var _online: Control
 var _online_status: Label
 var _code_label: Label
@@ -109,7 +126,7 @@ func _ready() -> void:
 	hit_btn.outline = Color(0, 0, 0, 0)
 	hit_btn.readiness = 0.0
 	hit_btn.pressed_down.connect(func() -> void: hit_pressed.emit())
-	hit_btn.released.connect(func(aim: Vector2) -> void: shot_requested.emit("drive", aim))
+	hit_btn.released.connect(func(aim: Vector2) -> void: shot_requested.emit(Hud.swipe_kind(aim), aim))
 	controls.add_child(hit_btn)
 
 	lob_btn = TouchButton.new()
@@ -125,12 +142,14 @@ func _ready() -> void:
 	smash_btn.label = "SMASH"
 	smash_btn.font_size = 15
 	smash_btn.enabled = false
+	smash_btn.charge = 0.0
 	smash_btn.fire_on_press = true
 	smash_btn.released.connect(func(aim: Vector2) -> void: shot_requested.emit("smash", aim))
 	controls.add_child(smash_btn)
 
 	_build_menu()
 	_build_online()
+	_build_training()
 	_build_pause_menu()
 
 	get_viewport().size_changed.connect(_layout)
@@ -151,6 +170,7 @@ func _process(delta: float) -> void:
 func show_menu(on: bool) -> void:
 	_menu.visible = on
 	_online.visible = false
+	_training.visible = false
 	controls.visible = not on
 	_score_panel.visible = not on
 	_rally_panel.visible = not on
@@ -187,6 +207,65 @@ func show_room_code(code: String) -> void:
 func show_ai_fallback(on: bool) -> void:
 	if _ai_btn.visible != on:
 		_ai_btn.visible = on
+
+
+var _training_info := {}
+
+
+## info: drill id -> short progress text ("Done · best 7"), shown under each drill.
+func set_training_info(info: Dictionary) -> void:
+	_training_info = info
+
+
+func show_training(on: bool, info := {}) -> void:
+	_training.visible = on
+	if not on:
+		return
+	_menu.visible = false
+	for c in _training_grid.get_children():
+		c.queue_free()
+	for d in TRAINING:
+		var id: String = d[0]
+		var sub: String = info.get(id, "")
+		var b := _button("%s\n%s" % [d[1], sub if sub != "" else "Not tried yet"], 15,
+			LIME if sub.begins_with("✓") else Color(1, 1, 1, 0.94), INK)
+		b.custom_minimum_size = Vector2(300, 58)
+		b.pressed.connect(func() -> void:
+			_training.visible = false
+			training_chosen.emit(id))
+		_training_grid.add_child(b)
+
+
+func _build_training() -> void:
+	_training = ColorRect.new()
+	(_training as ColorRect).color = Color(0.03, 0.06, 0.1, 0.86)
+	_training.mouse_filter = Control.MOUSE_FILTER_STOP
+	_training.visible = false
+	add_child(_training)
+	var centre := CenterContainer.new()
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_training.add_child(centre)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	centre.add_child(col)
+	var title := _label("Training", 32, Color.WHITE)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(title)
+	var sub := _label("A ball machine feeds you. Hit the goal to complete each drill.", 15, MUTED)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(sub)
+	_training_grid = GridContainer.new()
+	_training_grid.columns = 2
+	_training_grid.add_theme_constant_override("h_separation", 10)
+	_training_grid.add_theme_constant_override("v_separation", 8)
+	col.add_child(_training_grid)
+	var back := _button("Back", 16, Color(1, 1, 1, 0.2), Color.WHITE)
+	back.custom_minimum_size = Vector2(140, 42)
+	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	back.pressed.connect(func() -> void:
+		_training.visible = false
+		_menu.visible = true)
+	col.add_child(back)
 
 
 func set_practice(on: bool) -> void:
@@ -376,11 +455,13 @@ func _build_menu() -> void:
 	grid.add_theme_constant_override("v_separation", 10)
 	col.add_child(grid)
 	for m in MODES:
-		var b := _button("%s\n%s" % [m[1], m[2]], 15, Color(1, 1, 1, 0.94) if m[0] != "quick" else LIME, INK)
+		var b := _button("%s\n%s" % [m[1], m[2]], 15, LIME if m[0] in ["training", "quick"] else Color(1, 1, 1, 0.94), INK)
 		b.custom_minimum_size = Vector2(330, 64)
 		var id: String = m[0]
 		if id == "online":
 			b.pressed.connect(func() -> void: show_online(true))
+		elif id == "training":
+			b.pressed.connect(func() -> void: show_training(true, _training_info))
 		else:
 			b.pressed.connect(func() -> void: mode_chosen.emit(id, _golden.button_pressed))
 		grid.add_child(b)
@@ -526,6 +607,8 @@ func _layout() -> void:
 	_menu.size = vp
 	_pause_menu.position = Vector2.ZERO
 	_pause_menu.size = vp
+	_training.position = Vector2.ZERO
+	_training.size = vp
 	_online.position = Vector2.ZERO
 	_online.size = vp
 	var rect := Rect2(Vector2.ZERO, vp)

@@ -28,6 +28,12 @@ var readiness := -1.0:   # 0..1 draws the timing arc; < 0 hides it
 			readiness = v
 			queue_redraw()
 
+## 0..1 power meter drawn as an orange ring (SMASH); < 0 hides it. Full = glowing.
+var charge := -1.0:
+	set(v):
+		if not is_equal_approx(v, charge):
+			charge = v
+			queue_redraw()
 var fire_on_press := false   # LOB / SMASH: act on touch-down, no swipe
 
 var _touch := -1
@@ -37,6 +43,11 @@ var _drag := Vector2.ZERO
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+func _process(_delta: float) -> void:
+	if charge >= 1.0:
+		queue_redraw()   # pulse
 
 
 func is_held() -> bool:
@@ -94,6 +105,15 @@ func _draw() -> void:
 		draw_arc(c, radius + 10, 0, TAU, 64, Color(1, 1, 1, 0.22), 5.0, true)
 		if readiness > 0.01:
 			draw_arc(c, radius + 10, -PI * 0.5, -PI * 0.5 + TAU * readiness, 64, LIME, 5.0, true)
+	if charge >= 0.0:
+		var orange := Color("ff9a2e")
+		draw_arc(c, radius + 7, 0, TAU, 48, Color(1, 1, 1, 0.18), 4.0, true)
+		if charge >= 1.0:
+			var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.008)
+			draw_circle(c, radius + 11, Color(LIME, 0.18 + 0.2 * pulse))
+			draw_arc(c, radius + 7, 0, TAU, 48, LIME, 5.0, true)
+		elif charge > 0.01:
+			draw_arc(c, radius + 7, -PI * 0.5, -PI * 0.5 + TAU * charge, 48, orange, 4.0, true)
 	var f := fill
 	if not enabled:
 		f = Color(f.r, f.g, f.b, f.a * 0.45)

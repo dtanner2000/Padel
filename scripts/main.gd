@@ -11,6 +11,7 @@ extends Node3D
 ##   --autoplay        the AI plays your player too (soak test), skips the menu
 ##   --mash            a bot taps HIT for you (tests the human code path)
 ##   --mode=ID         skip the menu: quick | set | match | practice
+##   --drill=ID        start a training drill: ground | aim | slice | glass | volley | smash | mix
 ##   --relay=URL       relay server to use (default Online.RELAY_URL)
 ##   --online-quick    go straight into an online quick match
 ##   --online-create=L create a private game (quick | set | match), prints the code
@@ -25,8 +26,28 @@ const SERVE_ORDER := [0, 2, 1, 3]   # you, rival/friend, Ana, Leo
 const BUFFER_TIME := 0.3            # a HIT pressed this early still counts
 const MOVE_ASSIST := 0.75           # auto-move towards your ball when the stick is idle (0 = off)
 const DEAD_BALL_TIME := 8.0
-const DRILLS := [["Groundstrokes", "ground"], ["Off the back glass", "glass"], ["Overheads", "overhead"]]
-const FEEDS_PER_DRILL := 6
+const CHARGE_HITS := 12.0           # SMASH charges over ~10-12 hits (perfect timing counts double)
+const SHOT_SPIN := {"slice": -1.0, "lob": -0.2, "drive": 0.15, "smash": 0.1, "power_smash": 0.6}
+
+## Training drills. z = where you stand (your half), goal 0 = endless.
+const DRILL_INFO := {
+	"ground": {"name": "Groundstrokes", "goal": 5, "z": 7.4,
+		"tip": "Hold HIT as the ball comes, let go when the ring is full.\nSwipe up for a deeper ball."},
+	"aim": {"name": "Aiming", "goal": 5, "z": 7.4,
+		"tip": "Swipe up-left or up-right to aim.\nLand it in the lit box."},
+	"slice": {"name": "Slice", "goal": 5, "z": 7.4,
+		"tip": "Flick HIT sideways to slice.\nIt stays low and dies off the glass."},
+	"glass": {"name": "Off the back glass", "goal": 5, "z": 8.0,
+		"tip": "Let it pass, wait for it off the glass, then hit.\nTime it well for a BAJADA."},
+	"volley": {"name": "Volleys at the net", "goal": 5, "z": 3.0,
+		"tip": "At the net: hit it before it bounces.\nShort, early swings."},
+	"smash": {"name": "Power smash", "goal": 3, "z": 4.2,
+		"tip": "Every hit charges SMASH. When it glows and the ball is high,\ntap SMASH to send it out of the court."},
+	"mix": {"name": "Free practice", "goal": 0, "z": 7.4,
+		"tip": "Everything mixed. How long a streak can you build?"},
+}
+const MIX_ORDER := ["ground", "glass", "slice", "volley", "smash", "aim"]
+const TRAINING_SAVE := "user://training.cfg"
 const FRIEND_INDEX := 2             # in versus your friend plays this rival slot
 
 
@@ -41,6 +62,7 @@ class Pad:
 	var aim := Vector2.ZERO
 	var held_fired := false   # HIT fired while held: ignore the release that follows
 	var mirror := 1.0
+	var touch := true          # held input comes from the touch HIT button (so flicks mean slice)
 
 	func world_move() -> Vector3:
 		var m := move.limit_length(1.0)
@@ -89,6 +111,12 @@ var practice := false
 var streak := 0
 var best_streak := 0
 var feeds := 0
+var drill_id := "mix"
+var drill_done := 0
+var training := ConfigFile.new()
+var target_sign := 1.0
+var target_marker: MeshInstance3D
+var last_hit_volley := false
 
 # versus
 var net_role := ""          # "" offline | "host" | "client"
@@ -144,6 +172,10 @@ func _ready() -> void:
 	hud.online_create.connect(_online_create)
 	hud.online_join.connect(_online_join)
 	hud.online_closed.connect(func() -> void: online.close())
+	hud.training_chosen.connect(_start_training)
+	training.load(TRAINING_SAVE)
+	hud.set_training_info(_training_summary())
+	_make_target_marker()
 	hud.play_ai_instead.connect(func() -> void:
 		online.close()
 		_on_mode_chosen("quick", true))
@@ -178,12 +210,16 @@ func _ready() -> void:
 			_online_create(start_online.get_slice(":", 1), true)
 		elif start_online.begins_with("join:"):
 			_online_join(start_online.get_slice(":", 1))
+	elif start_mode.begins_with("drill:"):
+		_start_training(start_mode.get_slice(":", 1))
 	elif start_mode != "":
 		_on_mode_chosen(start_mode, true)
 	elif autoplay or mash:
 		_on_mode_chosen("match", true)
 	else:
 		_go_menu()
+		if "--show-training" in OS.get_cmdline_user_args():
+			hud.show_training(true, _training_summary())
 
 
 func _parse_args() -> void:
@@ -204,6 +240,8 @@ func _parse_args() -> void:
 			start_online = "join:" + a.get_slice("=", 1)
 		elif a.begins_with("--mode="):
 			start_mode = a.get_slice("=", 1)
+		elif a.begins_with("--drill="):
+			start_mode = "drill:" + a.get_slice("=", 1)
 		elif a.begins_with("--screenshot="):
 			var v := a.get_slice("=", 1)
 			shot_path = v.get_slice("@", 0)
@@ -216,7 +254,7 @@ func _setup_input() -> void:
 	var map := {
 		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT],
 		"move_up": [KEY_W, KEY_UP], "move_down": [KEY_S, KEY_DOWN],
-		"hit": [KEY_SPACE, KEY_J], "lob": [KEY_K], "smash": [KEY_L],
+		"hit": [KEY_SPACE, KEY_J], "lob": [KEY_K], "smash": [KEY_L], "slice": [KEY_I],
 	}
 	for action in map:
 		if not InputMap.has_action(action):
@@ -245,6 +283,8 @@ func _setup_environment() -> void:
 	add_child(sun)
 	camera = Camera3D.new()
 	camera.fov = 50.0
+	# the camera follows smoothly in _process itself, so it opts out of physics interpolation
+	camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	camera.position = cam_base
 	add_child(camera)
 	camera.look_at(Vector3(0, 0.0, 1.0))
@@ -410,7 +450,9 @@ func _go_menu() -> void:
 	for p in players:
 		p.visible = true
 	machine.visible = false
+	target_marker.visible = false
 	court.set_viewer_end(0)
+	hud.set_training_info(_training_summary())
 	hud.show_menu(true)
 	hud.set_team_names(_team_name(0, 0), _team_name(1, 0))
 	_start_point()
@@ -434,8 +476,11 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 	faults = 0
 	streak = 0
 	feeds = 0
+	drill_done = 0
 	for p in players:
 		p.visible = p.is_human or not practice
+		p.smash_charge = 0.0
+	target_marker.visible = false
 	machine.visible = practice
 	hud.show_menu(false)
 	hud.set_practice(practice)
@@ -443,8 +488,53 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 	_start_point()
 
 
-func _drill() -> Array:
-	return DRILLS[int(feeds / float(FEEDS_PER_DRILL)) % DRILLS.size()]
+## The drill feeding the current ball (Free practice cycles through them).
+func _drill() -> String:
+	if drill_id == "mix":
+		return MIX_ORDER[int(feeds / 4.0) % MIX_ORDER.size()]
+	return drill_id
+
+
+func _start_training(id: String) -> void:
+	drill_id = id
+	best_streak = int(training.get_value(id, "best", 0))
+	_on_mode_chosen("practice", true)
+	hud.show_message("%s\n%s" % [DRILL_INFO[id].name, DRILL_INFO[id].tip], 4.0)
+
+
+func _training_summary() -> Dictionary:
+	var out := {}
+	for id in DRILL_INFO:
+		var best := int(training.get_value(id, "best", 0))
+		var goal: int = DRILL_INFO[id].goal
+		if bool(training.get_value(id, "done", false)):
+			out[id] = "✓ Done · best streak %d" % best
+		elif best > 0:
+			out[id] = "Best streak %d%s" % [best, " · goal %d" % goal if goal > 0 else ""]
+	return out
+
+
+func _training_hud() -> void:
+	var goal: int = DRILL_INFO[drill_id].goal
+	if goal > 0 and drill_done < goal:
+		hud.set_rally_text("GOAL %d/%d  ·  STREAK %d" % [drill_done, goal, streak])
+	else:
+		hud.set_rally_text("STREAK %d  ·  BEST %d" % [streak, best_streak])
+
+
+func _make_target_marker() -> void:
+	target_marker = MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(2.6, 0.01, 3.2)
+	target_marker.mesh = bm
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.78, 0.96, 0.2, 0.35)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	target_marker.material_override = m
+	target_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	target_marker.visible = false
+	add_child(target_marker)
 
 
 # --- versus: connection ---------------------------------------------------------
@@ -654,10 +744,12 @@ func _send_snapshot() -> void:
 	var pos := PackedVector3Array()
 	var vel := PackedVector3Array()
 	var swings := PackedInt32Array()
+	var kinds := PackedStringArray()
 	for p in players:
 		pos.append(p.position)
 		vel.append(p.vel)
 		swings.append(p.swing_count)
+		kinds.append(p.last_swing)
 	var rp := Vector3.ZERO
 	var rv := false
 	if remote_player and assigned[remote_player.team] == remote_player and intercepts.has(remote_player) and state == State.RALLY:
@@ -666,7 +758,7 @@ func _send_snapshot() -> void:
 	var ready := _readiness(remote_player)
 	net_snapshot.rpc_id(remote_peer, [
 		state, last_hitter_team, ball.sim.pos, ball.sim.vel if ball.live else Vector3.ZERO,
-		pos, vel, swings, rv, rp, ready[0], ready[1]])
+		pos, vel, swings, rv, rp, ready[0], ready[1], kinds, ball.sim.spin])
 
 
 # --- versus: client → host ------------------------------------------------------
@@ -717,6 +809,8 @@ func _client_tick(delta: float) -> void:
 	var pos: PackedVector3Array = _snap[4]
 	var vel: PackedVector3Array = _snap[5]
 	var swings: PackedInt32Array = _snap[6]
+	var kinds: PackedStringArray = _snap[11]
+	ball.shown_spin = _snap[12]
 	var k := 1.0 - exp(-18.0 * delta)
 	for i in 4:
 		var p := players[i]
@@ -724,14 +818,15 @@ func _client_tick(delta: float) -> void:
 		p.vel = vel[i]
 		if swings[i] != _seen_swings[i]:
 			_seen_swings[i] = swings[i]
-			p.swing()
+			p.swing(kinds[i])
 	ring.visible = _snap[7]
 	if ring.visible:
 		var rp: Vector3 = _snap[8]
 		ring.position = Vector3(rp.x, 0.02, rp.z)
 	var rallying := st == State.RALLY
 	hud.hit_btn.readiness = _snap[9] if rallying else 0.0
-	hud.smash_btn.enabled = _snap[10] and rallying
+	hud.smash_btn.charge = _snap[10]
+	hud.smash_btn.enabled = _snap[10] >= 1.0
 	var aiming := rallying and last_hitter != _my_team() and pad_local.held
 	aim_marker.visible = aiming
 	if aiming:
@@ -763,17 +858,23 @@ func _start_point() -> void:
 	if practice:
 		var h := _human()
 		var d := _drill()
-		h.position = Vector3(0, 0, 4.2 if d[1] == "overhead" else 7.4)
+		h.position = Vector3(0, 0, DRILL_INFO[d].z)
 		h.vel = Vector3.ZERO
 		h.face_net()
+		if d == "smash":
+			h.smash_charge = 1.0
 		ball.live = false
 		ball.place(machine.position + Vector3(0, 1.0, 0.4))
+		target_marker.visible = d == "aim"
+		if d == "aim":
+			target_sign = -target_sign
+			target_marker.position = Vector3(target_sign * 2.6, 0.02, -7.4)
 		_snap_positions()
 		last_hitter_team = 1
-		state_timer = 1.6 if feeds == 0 else 1.0
-		if feeds % FEEDS_PER_DRILL == 0:
-			hud.show_message("Drill: %s" % d[0], 1.4)
-		hud.set_rally_text("STREAK %d · BEST %d" % [streak, best_streak])
+		state_timer = 2.2 if feeds == 0 else 1.0
+		if drill_id == "mix" and feeds > 0 and feeds % 4 == 0:
+			hud.show_message(DRILL_INFO[d].name, 1.2)
+		_training_hud()
 		return
 
 	var srv := players[_server_index()]
@@ -829,7 +930,7 @@ func _serve(srv: Player, aim: Vector2) -> void:
 	var to := Vector3(tx, Ball.RADIUS, tz)
 	ball.velocity = Shot.solve(ball.sim.pos, to, 12.5, 0.3)
 	ball.live = true
-	srv.swing()
+	srv.swing("serve")
 	serve_in_play = true
 	last_hitter_team = srv.team
 	last_shot_kind = "serve"
@@ -840,14 +941,17 @@ func _serve(srv: Player, aim: Vector2) -> void:
 
 
 func _feed() -> void:
-	var kind: String = _drill()[1]
+	var kind := _drill()
 	var from := ball.sim.pos
 	var r := Ball.RADIUS
 	match kind:
 		"glass":
 			ball.velocity = Shot.solve(from, Vector3(randf_range(-3.0, 3.0), r, 8.9), 15.5, 0.4)
-		"overhead":
+		"smash":
 			ball.velocity = Shot.launch_velocity(from, Vector3(randf_range(-2.5, 2.5), r, randf_range(5.0, 6.5)), 1.75)
+		"volley":
+			# flat and quick, passing the net player at chest height
+			ball.velocity = Shot.solve(from, Vector3(randf_range(-2.2, 2.2), r, randf_range(5.6, 6.6)), 13.0, 0.5)
 		_:
 			ball.velocity = Shot.solve(from, Vector3(randf_range(-3.2, 3.2), r, randf_range(5.5, 7.6)), 12.0, 0.4)
 	ball.live = true
@@ -871,16 +975,46 @@ func _practice_result(good: bool, reason: String) -> void:
 	aim_marker.visible = false
 	stats.points += 1
 	stats.reasons[reason] = stats.reasons.get(reason, 0) + 1
+	var goal: int = DRILL_INFO[drill_id].goal
 	if good:
 		streak += 1
+		drill_done += 1
 		best_streak = maxi(best_streak, streak)
-		hud.show_message("%s  ×%d" % [reason, streak], 0.8)
+		if goal > 0 and drill_done == goal:
+			hud.show_message("✓ Drill complete!\n%s" % DRILL_INFO[drill_id].name, 2.2)
+			training.set_value(drill_id, "done", true)
+			state_timer = 2.2
+		else:
+			hud.show_message("%s  ×%d" % [reason, streak], 0.9)
 	else:
 		streak = 0
-		hud.show_message(reason, 1.0)
-	hud.set_rally_text("STREAK %d · BEST %d" % [streak, best_streak])
+		hud.show_message(reason, 1.3)
+	if best_streak > int(training.get_value(drill_id, "best", 0)) or (good and goal > 0 and drill_done == goal):
+		training.set_value(drill_id, "best", maxi(best_streak, int(training.get_value(drill_id, "best", 0))))
+		training.save(TRAINING_SAVE)
+	_training_hud()
 	if quit_after > 0.0:
-		print("[practice] %s %s streak=%d" % [_drill()[0], reason, streak])
+		print("[practice] %s %s streak=%d done=%d" % [drill_id, reason, streak, drill_done])
+
+
+## Training: did the ball you just hit land the way this drill asks?
+func _practice_judge(pos: Vector3, landed: bool) -> void:
+	var ok := true
+	var why := "In!" if landed else "Out of the court!"
+	match _drill():
+		"aim":
+			ok = landed and signf(pos.x) == target_sign and absf(pos.x) > 1.2 and absf(pos.z) > 5.6
+			why = "On target!" if ok else "In, but missed the box"
+		"slice":
+			ok = last_shot_kind == "slice"
+			why = "Slice!" if ok else "In, but flick sideways to slice"
+		"smash":
+			ok = last_shot_kind == "power_smash"
+			why = ("Power smash!" if landed else "Por tres! Out of the court!") if ok else "In, now save it for SMASH"
+		"volley":
+			ok = last_hit_volley
+			why = "Volley!" if ok else "In, but volley it before the bounce"
+	_practice_result(ok, why)
 
 
 func _point_text(team: int, reason: String, res: String, viewer: int) -> String:
@@ -900,7 +1034,10 @@ func _award(team: int, reason: String) -> void:
 	if state != State.RALLY:
 		return
 	if practice:
-		_practice_result(team == 0, "Missed it" if reason == "Double bounce" else reason)
+		if team == 0 and reason == "Out of the court!":
+			_practice_judge(ball.sim.pos, false)
+		else:
+			_practice_result(team == 0, "Missed it" if reason == "Double bounce" else reason)
 		return
 	state = State.POINT_OVER
 	state_timer = 1.8
@@ -953,7 +1090,7 @@ func _on_floor(pos: Vector3) -> void:
 			_award(1 - last_hitter_team, "Into the net")
 		return
 	if practice and last_hitter_team == 0:
-		_practice_result(true, "In!")
+		_practice_judge(pos, true)
 		return
 	receiver_bounces += 1
 	wall_since_bounce = false
@@ -1037,7 +1174,8 @@ func _physics_process(delta: float) -> void:
 		get_viewport().get_texture().get_image().save_png(shot_path)
 		print("saved ", shot_path)
 	if mash and Engine.get_physics_frames() % 15 == 0:
-		_on_shot_requested("drive", Vector2(randf_range(-1, 1), randf_range(-0.5, 0.8)))
+		var a := Vector2(randf_range(-1, 1), randf_range(-0.5, 0.8))
+		_on_shot_requested("smash" if randf() < 0.15 else Hud.swipe_kind(a), a)
 	_read_keyboard()
 	if net_role == "client":
 		_client_tick(delta)
@@ -1045,6 +1183,7 @@ func _physics_process(delta: float) -> void:
 	pad_local.buffer = maxf(0.0, pad_local.buffer - delta)
 	pad_remote.buffer = maxf(0.0, pad_remote.buffer - delta)
 	pad_local.mirror = 1.0
+	pad_local.touch = hud.hit_btn.is_held()
 	pad_local.move = hud.joystick.value + Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	pad_local.held = _hit_held()
 	pad_local.live_aim = _held_aim()
@@ -1278,6 +1417,8 @@ func _ai_hit(p: Player) -> void:
 		kind = "lob"
 	elif absf(p.position.z) > 7.5 and randf() < 0.18:
 		kind = "lob"   # defensive lob from the back
+	elif receiver_bounces >= 1 and bp.y < 1.15 and randf() < 0.3:
+		kind = "slice"  # low ball: cut it
 	# aim away from the nearer opponent
 	var nearest := 0.0
 	var best := INF
@@ -1305,6 +1446,8 @@ func _difficulty(p: Player) -> float:
 		d += 0.12   # volleys and overheads are harder
 	if wall_since_bounce:
 		d += 0.1    # reading the glass
+	if ball.sim.spin < -0.3:
+		d += 0.12   # a slice stays low and skids
 	return d
 
 
@@ -1333,12 +1476,14 @@ func _read_keyboard() -> void:
 		_on_shot_requested("lob", aim)
 	if Input.is_action_just_pressed("smash"):
 		_on_shot_requested("smash", aim)
+	if Input.is_action_just_pressed("slice"):
+		_on_shot_requested("slice", Vector2(aim.x if aim.x != 0.0 else 1.0, 0.0))
 
 
 ## Touch-down on HIT: the player shows a backswing straight away.
 func _on_hit_pressed() -> void:
 	if net_role == "client":
-		_me().ready_swing()
+		_me().ready_swing(ball.position.y > 2.0)
 		net_hit_pressed.rpc_id(1)
 		return
 	if not _ai_human():
@@ -1361,7 +1506,7 @@ func _on_shot_requested(kind: String, aim: Vector2) -> void:
 func _pad_pressed(pad: Pad, p: Player) -> void:
 	pad.held_fired = false
 	if state == State.RALLY:
-		p.ready_swing()
+		p.ready_swing(ball.sim.pos.y > 2.0)
 
 
 func _pad_shot(pad: Pad, kind: String, aim: Vector2) -> void:
@@ -1386,27 +1531,45 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 	var held := pad.held and state == State.RALLY
 	if held:
 		pad.buffer = maxf(pad.buffer, 0.05)
-		pad.kind = "drive"
+		pad.kind = Hud.swipe_kind(pad.live_aim) if pad.touch else "drive"
 		pad.aim = pad.live_aim
 	if pad.buffer > 0.0 and _can_hit(p):
 		var bp := ball.sim.pos
 		var kind := pad.kind
-		if kind == "smash" and bp.y < 1.8:
-			kind = "drive"
-		elif kind == "drive" and bp.y > 2.0:
+		if kind == "smash":
+			# SMASH only fires charged and with the ball high; otherwise a normal shot
+			if p.smash_charge >= 1.0 and bp.y > 1.6:
+				kind = "power_smash"
+			else:
+				kind = "bandeja" if bp.y > 2.0 else "drive"
+		elif kind in ["drive", "slice"] and bp.y > 2.0:
 			kind = "bandeja"
 		var q := _timing_quality(p)
 		var glass := wall_since_bounce
 		pad.buffer = 0.0
 		pad.held_fired = held
-		_do_hit(p, kind, pad.world_aim(pad.aim), q, maxf(0.0, (0.7 - q) * 0.6) + _difficulty(p) * 0.12)
+		var miss := maxf(0.0, (0.7 - q) * 0.6) + _difficulty(p) * 0.12
+		if kind == "power_smash":
+			miss *= 0.5
+		_do_hit(p, kind, pad.world_aim(pad.aim), q, miss)
+		var was_full := p.smash_charge >= 1.0
+		if kind == "power_smash":
+			p.smash_charge = 0.0
+		else:
+			p.smash_charge = minf(1.0, p.smash_charge + (2.0 if q > 0.85 else 1.0) / CHARGE_HITS)
 		var fx := ""
-		if glass and q >= 0.7 and kind == "drive":
+		if kind == "power_smash":
+			fx = "POWER SMASH!"
+		elif not was_full and p.smash_charge >= 1.0:
+			fx = "SMASH READY!"
+		elif glass and q >= 0.7 and kind == "drive":
 			fx = "BAJADA!"
 		elif q > 0.85:
 			fx = "PERFECT!"
 		elif glass:
 			fx = "OFF THE GLASS!"
+		elif kind == "slice":
+			fx = "SLICE"
 		var ms := 60 if q > 0.85 else 25
 		if p == remote_player:
 			net_feedback.rpc_id(remote_peer, fx, ms)
@@ -1423,26 +1586,30 @@ func _timing_quality(p: Player) -> float:
 	return clampf(1.0 - absf(bp.y - ideal) * 0.45 - absf(d - 0.55) * 0.35, 0.25, 1.0)
 
 
-## [timing arc 0..1, smash available] for a person's player.
+## [timing arc 0..1, SMASH charge 0..1] for a person's player.
 func _readiness(p: Player) -> Array:
-	if p == null or state != State.RALLY:
-		return [0.0, false]
+	if p == null:
+		return [0.0, 0.0]
+	if state != State.RALLY:
+		return [0.0, p.smash_charge]
 	if _can_hit(p):
-		return [_timing_quality(p), ball.sim.pos.y > 1.9]
+		return [_timing_quality(p), p.smash_charge]
 	if assigned[p.team] == p:
 		var d := ball.sim.pos.distance_to(p.position + Vector3(0, 1, 0))
-		return [clampf(1.0 - (d - 1.0) / 6.0, 0.0, 0.8), false]
-	return [0.0, false]
+		return [clampf(1.0 - (d - 1.0) / 6.0, 0.0, 0.8), p.smash_charge]
+	return [0.0, p.smash_charge]
 
 
 func _update_hud() -> void:
 	if _ai_human():
 		hud.hit_btn.readiness = 0.0
 		hud.smash_btn.enabled = false
+		hud.smash_btn.charge = 0.0
 		return
 	var r := _readiness(_human())
 	hud.hit_btn.readiness = r[0]
-	hud.smash_btn.enabled = r[1]
+	hud.smash_btn.charge = r[1]
+	hud.smash_btn.enabled = r[1] >= 1.0
 
 
 # --- shots ----------------------------------------------------------------------
@@ -1459,6 +1626,15 @@ func _shot_target(kind: String, aim: Vector2, s: float, q: float) -> Array:
 			to = Vector3(aim.x * 3.5, r, -s * lerpf(3.0, 6.0, depth))
 			speed = lerpf(20.0, 27.0, q)
 			clear = 0.1
+		"power_smash":
+			# lands near the service line with topspin: kicks up and over the back wall
+			to = Vector3(aim.x * 3.0, r, -s * lerpf(2.8, 4.4, depth))
+			speed = lerpf(26.0, 32.0, q)
+			clear = 0.06
+		"slice":
+			to = Vector3(signf(aim.x) * lerpf(1.5, 3.8, absf(aim.x)), r, -s * lerpf(6.0, 8.8, depth))
+			speed = lerpf(12.0, 15.0, q)
+			clear = 0.12
 		"bandeja":
 			to = Vector3(aim.x * 3.5, r, -s * lerpf(6.0, 8.5, depth))
 			speed = 12.0
@@ -1499,9 +1675,11 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 		ball.velocity = Shot.launch_velocity(from, to, lerpf(1.7, 2.1, depth))
 	else:
 		ball.velocity = Shot.solve(from, to, speed, clear)
+	ball.sim.spin = SHOT_SPIN.get(kind, 0.0)
+	last_hit_volley = receiver_bounces == 0
 	if trace:
 		print("[hit] t=%.1f %s %s from=%s to=%s q=%.2f b=%d" % [elapsed, p.display_name, kind, from.snapped(Vector3.ONE * 0.1), to.snapped(Vector3.ONE * 0.1), q, receiver_bounces])
-	p.swing()
+	p.swing(kind)
 	p.hit_cooldown = 0.4
 	last_hitter_team = p.team
 	last_shot_kind = kind

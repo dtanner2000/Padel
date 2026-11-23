@@ -21,6 +21,11 @@ var velocity: Vector3:
 		sim.vel = v
 
 var _shadow: MeshInstance3D
+var _mat: StandardMaterial3D
+const BALL_COLOUR := Color("d9f542")
+const SLICE_COLOUR := Color("7fd6ff")
+## Shown spin for the visual tint; the online guest sets this from snapshots.
+var shown_spin := 0.0
 
 
 func _ready() -> void:
@@ -35,6 +40,7 @@ func _ready() -> void:
 	m.emission = Color("d9f542")
 	m.emission_energy_multiplier = 0.35
 	mi.material_override = m
+	_mat = m
 	add_child(mi)
 
 	_shadow = MeshInstance3D.new()
@@ -56,6 +62,8 @@ func _ready() -> void:
 func place(p: Vector3) -> void:
 	sim.pos = p
 	sim.vel = Vector3.ZERO
+	sim.spin = 0.0
+	shown_spin = 0.0
 	position = p
 
 
@@ -71,6 +79,12 @@ func _physics_process(delta: float) -> void:
 					"net": net_hit.emit(e[1])
 					"out": out_of_court.emit(e[1])
 		position = sim.pos
+	if live:
+		shown_spin = sim.spin
+	# a sliced ball glows cool blue so the spin reads on a phone screen
+	var c := BALL_COLOUR.lerp(SLICE_COLOUR, clampf(-shown_spin, 0.0, 1.0))
+	_mat.albedo_color = c
+	_mat.emission = c
 	_shadow.global_position = Vector3(position.x, 0.012, position.z)
 	var s := clampf(1.2 - position.y * 0.12, 0.4, 1.2)
 	_shadow.scale = Vector3(s, 1, s)

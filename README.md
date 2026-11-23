@@ -8,13 +8,13 @@ Open the folder in **Godot 4.6** (4.4+ works) and press F5. On desktop, mouse cl
 
 ## Modes
 
-The start menu (with a live AI match playing behind it) offers:
+The home screen (a live AI match plays behind it):
 
+- **Training** (first): ball-machine drills, each with a tip and a goal, and progress saved on the device. The drills are groundstrokes, aiming (land it in the lit box), slice, off the back glass, volleys at the net, power smash, and free practice (everything mixed, endless streak).
 - **Quick match**: one set, first to 4 games, about five minutes
 - **One set**: first to 6, tie-break at 6-6
 - **Full match**: best of three
 - **Play online**: a quick match against a random opponent, or a private game with a friend using a 4-letter code. You and Ana (AI) take on them and Leo (AI). See below.
-- **Practice**: a ball machine on the far baseline feeds six balls per drill, cycling groundstrokes → off the back glass → overheads. It counts your streak of balls landed in.
 
 The golden point toggle is on the menu. The pause button gives **Resume / Quit to menu**.
 
@@ -60,12 +60,15 @@ Then set `RELAY_URL := "wss://<app-name>.fly.dev"` in `scripts/online.gd`. Keep 
 | Touch | Keyboard | What it does |
 |---|---|---|
 | Left thumbstick (floats where you touch) | WASD / arrows | Move |
-| **HIT**: hold, swipe to aim | Hold Space / J, aim with move keys | Touching HIT shows your backswing at once. While you hold it, a white ring marks where the shot will land, and the shot fires the moment the ball is in reach. A quick tap still works (it's buffered for 0.3 s). The lime arc shows timing |
+| **HIT**: hold, swipe to aim | Hold Space / J, aim with move keys | Touching HIT starts the backswing. While you hold it, a white ring marks where the shot will land, and it fires the moment the ball is in reach. Swipe up for depth, up-left/up-right to aim. A quick tap still works. The lime arc shows timing |
+| **Flick HIT sideways** | I | **Slice**: backspin that stays low, skids and dies off the glass (the ball glows blue) |
 | **LOB** | K | Lob (fires on touch-down) |
-| **SMASH** (lit when the ball is overhead) | L | Flat smash. A high ball played with HIT becomes a bandeja |
+| **SMASH** (orange ring fills as you play) | L | Charges over about 10–12 hits (perfect timing counts double). When it glows, a high ball becomes a **power smash** that kicks up and out of the court. A high ball played with HIT is a bandeja |
 | II | — | Pause menu |
 
-With the stick idle, *move-assist* steers you to your ball (the lime ring); set `MOVE_ASSIST` in `main.gd`. Hitting a well-timed ball after it comes off your own back glass is a **bajada**, with extra pace. Hits trigger haptics on iPhone.
+With the stick idle, *move-assist* steers you to your ball (the lime ring); set `MOVE_ASSIST` in `main.gd`. A well-timed ball taken off your own back glass is a **bajada**, with extra pace. Hits trigger haptics on iPhone.
+
+**Players** are a light code-driven rig in `player.gd`: shoulder → elbow → hand holding the paddle (head up, face to the net), legs and free arm that swing when running, and swing tweens for the forehand, slice, overhead and underarm serve. No animation files are needed.
 
 ## Design notes from Red Bull Padel: Court Legends reviews
 
@@ -116,6 +119,8 @@ godot --headless --path . --fixed-fps 60 -- --autoplay --quit-after=600   # AI v
 godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot taps HIT as you
 --mode=quick|set|match|practice                                           # skip the menu
 --relay=ws://127.0.0.1:8080 --online-quick                                # online test (run two copies)
+--drill=ground|aim|slice|glass|volley|smash|mix                           # start a training drill
+godot --path . -s tools/pose_test.gd -- out                               # render the player rig in poses
 --trace                                                                   # print every shot
 --screenshot=out.png@8                                                    # save a frame (needs a renderer)
 ```
