@@ -132,25 +132,21 @@ godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot 
 
 ## Builds with Codemagic
 
-`codemagic.yaml` has two workflows. Both download Godot 4.6.1 and its export templates on the build machine, so nothing needs installing.
+`codemagic.yaml` follows the Jetpack Attack pipeline (`dtanner2000/JPA`), which already ships to TestFlight. Both workflows run on the **Mac mini M2**, since Linux machines aren't on the current Codemagic plan, and download Godot **4.6.3** and its export templates.
 
-| Workflow | Machine | Output |
-|---|---|---|
-| **iOS → TestFlight** | Mac mini M2 | Godot exports the Xcode project (`export_project_only`), Codemagic signs it, builds the IPA and uploads it to TestFlight |
-| **Android → signed APK** | Linux | A signed release APK on the build page to sideload. AAB for Play comes later and needs Godot's Gradle build |
+| Workflow | Output |
+|---|---|
+| **iOS → TestFlight** | Fetches signing files, Godot exports the Xcode project, Codemagic builds the IPA and uploads it to TestFlight (internal testers get it automatically) |
+| **Android → signed APK** | A signed release APK to sideload. Play needs an AAB via Gradle later; JPA's `android-play` workflow is the pattern |
 
-Identifiers: bundle ID / Android package **com.davidtanner.padel**, App Store Connect Apple ID **6838439193**. During the iOS build the Team ID is read from the provisioning profile Codemagic fetches, and the build number is one more than the latest TestFlight build (Android uses Codemagic's `BUILD_NUMBER`). So `REPLACE_TEAM_ID` in `export_presets.cfg` can stay; set your real Team ID there only if you export from the editor.
+Identifiers: bundle ID / Android package **com.davidtanner.padel**, App Store Connect Apple ID **6838439193**, Team ID **3YB9G94LWA** (in `export_presets.cfg`). Build numbers come from Codemagic's `PROJECT_BUILD_NUMBER`.
 
-**One-time setup**
-1. Push this folder to a Git repo (GitHub, GitLab or Bitbucket). `.gitignore` already excludes `.godot/`, `build/` and `server/node_modules/`.
-2. In Codemagic: **Add application** → pick the repo → it finds `codemagic.yaml`.
-3. App Store Connect app record: done (`com.davidtanner.padel`, Apple ID 6838439193).
-4. In Codemagic: **Team settings → Integrations → Developer Portal / App Store Connect**: add an API key (App Store Connect → Users and Access → Integrations → Keys, "App Manager" role) and name it **Padel ASC**.
-5. `codemagic.yaml` already has the bundle ID, Apple ID and Android package. Nothing to edit.
-6. Android only: **Code signing identities → Android keystores**: upload a keystore with reference **padel_keystore**. Godot needs the keystore password and the key password to be the same.
-7. Start **iOS → TestFlight**. About 10–15 minutes later the build appears in TestFlight. Internal testers on your team can install it straight away.
-
-The editor's export presets work locally too: fill in the team ID and bundle ID in *Project → Export*. On Windows, iOS can only export the Xcode project, so Codemagic does the signing and building.
+**One-time setup on the Padel app in Codemagic**
+1. **Add application** → the **Padel** repo → it finds `codemagic.yaml`.
+2. App Store Connect key: reuses the team-level integration **JPA ASC Key**. Nothing to add.
+3. **Environment variables**: create group **apple** with `CERTIFICATE_PRIVATE_KEY` (Secure), the same key Jetpack Attack's `apple` group holds. Groups are per app, so it must be added again here. If you don't have it any more, generate one (`ssh-keygen -t rsa -b 2048 -m PEM -f padel_cert_key -q -N ""`) and paste the file's contents; the first build creates a new distribution certificate.
+4. Android only: **Code signing identities → Android keystores** → reference **padel_keystore** (or point the workflow at `jpa_keystore` for quick sideload tests). Keep a backup of any key you'll publish with.
+5. Run **iOS → TestFlight**.
 
 ## Store release checklist
 

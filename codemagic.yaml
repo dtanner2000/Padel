@@ -1,171 +1,205 @@
-# Codemagic CI for Padel (Godot 4.6.1)
+# PADEL: OFF THE GLASS — Codemagic CI (Godot 4.6)
+# Modelled on the Jetpack Attack pipeline (dtanner2000/JPA), which already ships to TestFlight.
 #
-#   ios-testflight : Godot exports the Xcode project → Codemagic signs it →
-#                    IPA → uploaded to TestFlight
-#   android-apk    : signed release APK, downloadable from the build page
+#   ios-testflight : Godot exports the Xcode project on a cloud Mac → signed IPA → TestFlight
+#   android-apk    : signed release APK to sideload for playtesting (no Gradle, no plugins)
 #
-# One-time setup in Codemagic (see README → "Builds with Codemagic"):
-#   1. Teams → Integrations → App Store Connect: add an API key and name it
-#      "Padel ASC" (or change `app_store_connect:` below to match).
-#   2. Bundle ID com.davidtanner.padel is registered and the App Store
-#      Connect app exists (Apple ID 6838439193). The Team ID is read from the
-#      provisioning profile during the build, so it isn't needed here.
-#   3. Android: Code signing identities → Android keystores: upload a
-#      keystore with reference name "padel_keystore" (keystore password and
-#      key password must be the same for Godot).
+# BEFORE FIRST BUILD (one-time, in the Codemagic web UI, on the *Padel* app):
+#   1. Integration: reuses the team-level App Store Connect key "JPA ASC Key" (already set up
+#      for Jetpack Attack, works for every app on the team). Nothing to add.
+#   2. App > Environment variables: create group "apple" with CERTIFICATE_PRIVATE_KEY (Secure),
+#      the same RSA private key Jetpack Attack's "apple" group uses. Environment groups are
+#      per app, so it has to be added again here. If you no longer have that key, generate a
+#      fresh one:  ssh-keygen -t rsa -b 2048 -m PEM -f padel_cert_key -q -N ""
+#      and paste padel_cert_key's contents. fetch-signing-files --create then makes a new
+#      distribution certificate (Apple allows a few per team).
+#   3. Android only: Code signing identities > Android keystores > reference "padel_keystore"
+#      (or change it below to jpa_keystore to sideload-test with the JPA key).
 #
-# Builds are started manually from the Codemagic dashboard. Uncomment the
-# `triggering` blocks to build on every push to main.
-
-definitions:
-  scripts:
-    - &set_godot_paths_mac
-      name: Install Godot and iOS export template
-      script: |
-        set -euo pipefail
-        cd "$HOME"
-        curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
-        unzip -q godot.zip
-        echo "GODOT=$HOME/Godot.app/Contents/MacOS/Godot" >> "$CM_ENV"
-        TPL="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
-        mkdir -p "$TPL"
-        curl -fsSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
-        unzip -q -j templates.tpz 'templates/ios.zip' 'templates/version.txt' -d "$TPL"
-        rm templates.tpz godot.zip
-    - &set_godot_paths_linux
-      name: Install Godot and Android export templates
-      script: |
-        set -euo pipefail
-        cd "$HOME"
-        curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-        unzip -q godot.zip
-        echo "GODOT=$HOME/Godot_v${GODOT_VERSION}-stable_linux.x86_64" >> "$CM_ENV"
-        TPL="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-        mkdir -p "$TPL"
-        curl -fsSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
-        unzip -q -j templates.tpz 'templates/android_release.apk' 'templates/android_debug.apk' 'templates/version.txt' -d "$TPL"
-        rm templates.tpz godot.zip
-        # point Godot at Codemagic's Android SDK and JDK
-        mkdir -p "$HOME/.config/godot"
-        MINOR=$(echo "$GODOT_VERSION" | cut -d. -f1,2)
-        cat > "$HOME/.config/godot/editor_settings-${MINOR}.tres" <<EOF
-        [gd_resource type="EditorSettings" format=3]
-
-        [resource]
-        export/android/android_sdk_path = "${ANDROID_SDK_ROOT}"
-        export/android/java_sdk_path = "${JAVA_HOME}"
-        EOF
-        sed -i 's/^        //' "$HOME/.config/godot/editor_settings-${MINOR}.tres"
+# Identifiers: bundle/package com.davidtanner.padel · App Store Connect Apple ID 6838439193 ·
+# Team 3YB9G94LWA (in export_presets.cfg).
 
 workflows:
   ios-testflight:
-    name: iOS → TestFlight
+    name: iOS -> TestFlight
+    max_build_duration: 60
     instance_type: mac_mini_m2
-    max_build_duration: 45
+
     integrations:
-      app_store_connect: Padel ASC
+      app_store_connect: JPA ASC Key
+
+    cache:
+      cache_paths:
+        - $CM_BUILD_DIR/.godot   # imported assets: faster rebuilds
+
     environment:
       xcode: latest
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.davidtanner.padel
+      groups:
+        - apple
       vars:
-        GODOT_VERSION: "4.6.1"
+        GODOT_VERSION: 4.6.3-stable
+        GODOT_URL: https://github.com/godotengine/godot-builds/releases/download
+        GODOT: /Users/builder/Downloads/Godot.app/Contents/MacOS/Godot
         BUNDLE_ID: com.davidtanner.padel
-        APP_STORE_APPLE_ID: "6838439193"    # App Store Connect → App Information → Apple ID
-        MARKETING_VERSION: "0.1.0"
-    # triggering:
-    #   events: [push]
-    #   branch_patterns:
-    #     - pattern: main
+
     scripts:
-      - *set_godot_paths_mac
-      - name: Stamp bundle ID, team and build number into the iOS preset
+      # Fetch-or-create the App Store signing files on the builder (same as JPA).
+      - name: Fetch signing files
         script: |
-          set -euo pipefail
-          # Team ID: read from the App Store provisioning profile Codemagic
-          # just fetched, so it never needs typing in.
-          # (Xcode 16+ keeps profiles in UserData; older Xcode in MobileDevice)
-          PROFILE=$(find "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
-            "$HOME/Library/MobileDevice/Provisioning Profiles" \
-            -name '*.mobileprovision' 2>/dev/null | head -1 || true)
-          if [ -z "$PROFILE" ]; then
-            echo "No provisioning profile found: check ios_signing and the 'Padel ASC' integration"; exit 1
-          fi
-          APPLE_TEAM_ID=$(security cms -D -i "$PROFILE" | plutil -extract TeamIdentifier.0 raw -o - -)
-          # Build number: one more than the latest TestFlight build.
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
-          BUILD=$((LATEST + 1))
-          echo "Team $APPLE_TEAM_ID, build $BUILD"
-          sed -i '' -E \
-            -e "s|^application/app_store_team_id=.*|application/app_store_team_id=\"${APPLE_TEAM_ID}\"|" \
-            -e "s|^application/bundle_identifier=.*|application/bundle_identifier=\"${BUNDLE_ID}\"|" \
-            -e "s|^application/short_version=.*|application/short_version=\"${MARKETING_VERSION}\"|" \
-            -e "s|^application/version=.*|application/version=\"${BUILD}\"|" \
-            export_presets.cfg
-          grep -E "^application/(app_store_team_id|bundle_identifier|short_version|version)=" export_presets.cfg
-      - name: Import assets
+          set -e
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --platform IOS \
+            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
+            --create
+          keychain initialize
+          keychain add-certificates
+
+      - name: Install Godot + export templates
+        working_directory: /Users/builder/Downloads
         script: |
-          "$GODOT" --headless --path . --import
-      - name: Export Xcode project
+          set -e
+          curl -fsSL "$GODOT_URL/$GODOT_VERSION/Godot_v${GODOT_VERSION}_macos.universal.zip" -o godot.zip
+          unzip -q godot.zip && rm godot.zip
+          "$GODOT" --version
+          curl -fsSL "$GODOT_URL/$GODOT_VERSION/Godot_v${GODOT_VERSION}_export_templates.tpz" -o tpl.tpz
+          unzip -q tpl.tpz && rm tpl.tpz
+          TVER=$(echo "$GODOT_VERSION" | sed 's/-/./')
+          DEST="$HOME/Library/Application Support/Godot/export_templates/$TVER"
+          mkdir -p "$DEST" && mv templates/* "$DEST"/
+          test -f "$DEST/ios.zip" || { echo "FATAL: ios.zip missing from templates"; exit 1; }
+
+      - name: Set build number + import resources
         script: |
-          set -euo pipefail
+          set -e
+          cd "$CM_BUILD_DIR"
+          # Apple needs a strictly increasing CFBundleVersion per upload.
+          sed -i '' "s|^application/version=\"[^\"]*\"|application/version=\"$PROJECT_BUILD_NUMBER\"|" export_presets.cfg
+          grep -E "^application/(version|short_version|bundle_identifier|app_store_team_id)=" export_presets.cfg
+          "$GODOT" --headless --path . --import || true
+          "$GODOT" --headless --path . --import || true
+
+      - name: Godot export (Xcode project)
+        script: |
+          set -e
+          sudo xcode-select -switch /Applications/Xcode.app
+          cd "$CM_BUILD_DIR"
           mkdir -p build/ios
-          "$GODOT" --headless --path . --export-release "iOS" build/ios/Padel.ipa
-          test -d build/ios/Padel.xcodeproj
-      - name: Apply signing profiles
+          "$GODOT" --headless --path . --export-release "iOS" build/ios/Padel.ipa > export.log 2>&1 || true
+          sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' export.log | tail -80
+          test -d build/ios/Padel.xcodeproj || { echo "FATAL: xcodeproj was not generated"; exit 1; }
+          xcodebuild -list -project build/ios/Padel.xcodeproj
+
+      - name: Sign + build IPA
         script: |
-          xcode-project use-profiles --project build/ios/Padel.xcodeproj
-      - name: Build IPA
-        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          xcode-project use-profiles
           xcode-project build-ipa --project build/ios/Padel.xcodeproj --scheme Padel
+
     artifacts:
       - build/ios/ipa/*.ipa
+      - export.log
       - /tmp/xcodebuild_logs/*.log
+
     publishing:
       app_store_connect:
         auth: integration
-        submit_to_testflight: true
-        # beta_groups:            # external testers need a Beta App Review first
-        #   - Playtesters
+        # Internal testers get processed builds automatically; set true when you add
+        # EXTERNAL testers (triggers Apple's beta review).
+        submit_to_testflight: false
 
+  # ── ANDROID → signed APK for sideload playtesting ──────────────────────────────────────────
+  # Same shape as JPA's Amazon workflow: stock export template, no Gradle, no plugins, on the Mac
+  # instance (linux_x2 isn't on this billing plan; the macOS image has the Android SDK and JDK).
+  # Google Play needs an AAB via Gradle later; see JPA's android-play workflow for that pattern.
   android-apk:
-    name: Android → signed APK
-    instance_type: linux_x2
-    max_build_duration: 30
+    name: Android -> signed APK
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+
+    cache:
+      cache_paths:
+        - $CM_BUILD_DIR/.godot
+
     environment:
       android_signing:
         - padel_keystore
       vars:
-        GODOT_VERSION: "4.6.1"
-        PACKAGE_NAME: com.davidtanner.padel
-        VERSION_NAME: "0.1.0"
-    # triggering:
-    #   events: [push]
-    #   branch_patterns:
-    #     - pattern: main
+        GODOT_VERSION: 4.6.3-stable
+        GODOT_URL: https://github.com/godotengine/godot-builds/releases/download
+        GODOT: /Users/builder/Downloads/Godot.app/Contents/MacOS/Godot
+        PRESET: Android
+        OUT: build/android/Padel.apk
+
     scripts:
-      - *set_godot_paths_linux
-      - name: Stamp package name and version into the Android preset
+      - name: Install Godot + export templates
+        working_directory: /Users/builder/Downloads
         script: |
-          set -euo pipefail
-          sed -i -E \
-            -e "s|^package/unique_name=.*|package/unique_name=\"${PACKAGE_NAME}\"|" \
-            -e "s|^version/name=.*|version/name=\"${VERSION_NAME}\"|" \
-            -e "s|^version/code=.*|version/code=${BUILD_NUMBER}|" \
-            export_presets.cfg
-          grep -E "^(package/unique_name|version/name|version/code)=" export_presets.cfg
-      - name: Import assets
+          set -e
+          curl -fsSL "$GODOT_URL/$GODOT_VERSION/Godot_v${GODOT_VERSION}_macos.universal.zip" -o godot.zip
+          unzip -q godot.zip && rm godot.zip
+          "$GODOT" --version
+          curl -fsSL "$GODOT_URL/$GODOT_VERSION/Godot_v${GODOT_VERSION}_export_templates.tpz" -o tpl.tpz
+          unzip -q tpl.tpz && rm tpl.tpz
+          TVER=$(echo "$GODOT_VERSION" | sed 's/-/./')
+          DEST="$HOME/Library/Application Support/Godot/export_templates/$TVER"
+          mkdir -p "$DEST" && mv templates/* "$DEST"/
+          test -f "$DEST/android_release.apk" \
+            || { echo "FATAL: android_release.apk missing from templates"; exit 1; }
+
+      # Headless Godot finds the SDK through EDITOR SETTINGS, not the environment.
+      - name: Point Godot at the Android SDK
         script: |
-          "$GODOT" --headless --path . --import
-      - name: Export signed APK
+          set -e
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          test -n "$SDK" || { echo "FATAL: no Android SDK on this builder"; exit 1; }
+          echo "ANDROID_HOME=$SDK" >> "$CM_ENV"
+          JH=$(/usr/libexec/java_home -v 17 2>/dev/null || echo "${JAVA_HOME:-}")
+          DIR="$HOME/Library/Application Support/Godot"
+          mkdir -p "$DIR"
+          for ES in "$DIR/editor_settings-4.tres" "$DIR/editor_settings-4.6.tres"; do
+            {
+              printf '%s\n' '[gd_resource type="EditorSettings" format=3]'
+              printf '\n'
+              printf '%s\n' '[resource]'
+              printf 'export/android/android_sdk_path = "%s"\n' "$SDK"
+              printf 'export/android/java_sdk_path = "%s"\n' "$JH"
+            } > "$ES"
+          done
+          cat "$DIR/editor_settings-4.6.tres"
+
+      - name: Wire the release keystore
         script: |
-          set -euo pipefail
-          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$CM_KEYSTORE_PATH"
-          export GODOT_ANDROID_KEYSTORE_RELEASE_USER="$CM_KEY_ALIAS"
-          export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="$CM_KEYSTORE_PASSWORD"
+          set -e
+          if [ -z "$CM_KEYSTORE_PATH" ]; then
+            echo "FATAL: no keystore. Codemagic > Code signing identities > Android keystores,"
+            echo "       reference name 'padel_keystore'."
+            exit 1
+          fi
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$CM_KEYSTORE_PATH" >> "$CM_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$CM_KEY_ALIAS" >> "$CM_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$CM_KEY_PASSWORD" >> "$CM_ENV"
+
+      - name: Set version code + import resources
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          sed -i '' "s|^version/code=.*|version/code=$PROJECT_BUILD_NUMBER|" export_presets.cfg
+          grep -E "^(version/code|version/name|package/unique_name)=" export_presets.cfg
+          "$GODOT" --headless --path . --import || true
+          "$GODOT" --headless --path . --import || true
+
+      - name: Godot export (APK)
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
           mkdir -p build/android
-          "$GODOT" --headless --path . --export-release "Android" build/android/Padel.apk
-          test -f build/android/Padel.apk
+          "$GODOT" --headless --path . --export-release "$PRESET" "$OUT" > export.log 2>&1 || true
+          sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' export.log | tail -80
+          test -f "$OUT" || { echo "FATAL: no APK produced"; exit 1; }
+          echo "--- APK size: $(( $(stat -f%z "$OUT") / 1024 / 1024 )) MB"
+
     artifacts:
       - build/android/*.apk
+      - export.log
