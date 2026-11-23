@@ -139,14 +139,14 @@ godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot 
 | **iOS → TestFlight** | Mac mini M2 | Godot exports the Xcode project (`export_project_only`), Codemagic signs it, builds the IPA and uploads it to TestFlight |
 | **Android → signed APK** | Linux | A signed release APK on the build page to sideload. AAB for Play comes later and needs Godot's Gradle build |
 
-Build numbers come from Codemagic's `BUILD_NUMBER`. Bundle ID, team ID and version are stamped into `export_presets.cfg` during the build, so the `REPLACE` placeholders in the file can stay.
+Identifiers: bundle ID / Android package **com.davidtanner.padel**, App Store Connect Apple ID **6838439193**. During the iOS build the Team ID is read from the provisioning profile Codemagic fetches, and the build number is one more than the latest TestFlight build (Android uses Codemagic's `BUILD_NUMBER`). So `REPLACE_TEAM_ID` in `export_presets.cfg` can stay; set your real Team ID there only if you export from the editor.
 
 **One-time setup**
 1. Push this folder to a Git repo (GitHub, GitLab or Bitbucket). `.gitignore` already excludes `.godot/`, `build/` and `server/node_modules/`.
 2. In Codemagic: **Add application** → pick the repo → it finds `codemagic.yaml`.
-3. In App Store Connect, create the app record with your bundle ID (e.g. `com.yourstudio.padel`).
+3. App Store Connect app record: done (`com.davidtanner.padel`, Apple ID 6838439193).
 4. In Codemagic: **Team settings → Integrations → Developer Portal / App Store Connect**: add an API key (App Store Connect → Users and Access → Integrations → Keys, "App Manager" role) and name it **Padel ASC**.
-5. Edit `codemagic.yaml`: set `bundle_identifier` and `BUNDLE_ID` (same value), `APPLE_TEAM_ID`, and for Android `PACKAGE_NAME`.
+5. `codemagic.yaml` already has the bundle ID, Apple ID and Android package. Nothing to edit.
 6. Android only: **Code signing identities → Android keystores**: upload a keystore with reference **padel_keystore**. Godot needs the keystore password and the key password to be the same.
 7. Start **iOS → TestFlight**. About 10–15 minutes later the build appears in TestFlight. Internal testers on your team can install it straight away.
 

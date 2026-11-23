@@ -7,8 +7,9 @@
 # One-time setup in Codemagic (see README → "Builds with Codemagic"):
 #   1. Teams → Integrations → App Store Connect: add an API key and name it
 #      "Padel ASC" (or change `app_store_connect:` below to match).
-#   2. Fill in BUNDLE_ID / APPLE_TEAM_ID / PACKAGE_NAME below (both places
-#      for iOS: the ios_signing block and vars).
+#   2. Bundle ID com.davidtanner.padel is registered and the App Store
+#      Connect app exists (Apple ID 6838439193). The Team ID is read from the
+#      provisioning profile during the build, so it isn't needed here.
 #   3. Android: Code signing identities → Android keystores: upload a
 #      keystore with reference name "padel_keystore" (keystore password and
 #      key password must be the same for Godot).
@@ -67,11 +68,11 @@ workflows:
       xcode: latest
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: com.REPLACE.padel
+        bundle_identifier: com.davidtanner.padel
       vars:
         GODOT_VERSION: "4.6.1"
-        BUNDLE_ID: com.REPLACE.padel
-        APPLE_TEAM_ID: REPLACE_TEAM_ID
+        BUNDLE_ID: com.davidtanner.padel
+        APP_STORE_APPLE_ID: "6838439193"    # App Store Connect → App Information → Apple ID
         MARKETING_VERSION: "0.1.0"
     # triggering:
     #   events: [push]
@@ -82,11 +83,25 @@ workflows:
       - name: Stamp bundle ID, team and build number into the iOS preset
         script: |
           set -euo pipefail
+          # Team ID: read from the App Store provisioning profile Codemagic
+          # just fetched, so it never needs typing in.
+          # (Xcode 16+ keeps profiles in UserData; older Xcode in MobileDevice)
+          PROFILE=$(find "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles" \
+            -name '*.mobileprovision' 2>/dev/null | head -1 || true)
+          if [ -z "$PROFILE" ]; then
+            echo "No provisioning profile found: check ios_signing and the 'Padel ASC' integration"; exit 1
+          fi
+          APPLE_TEAM_ID=$(security cms -D -i "$PROFILE" | plutil -extract TeamIdentifier.0 raw -o - -)
+          # Build number: one more than the latest TestFlight build.
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
+          BUILD=$((LATEST + 1))
+          echo "Team $APPLE_TEAM_ID, build $BUILD"
           sed -i '' -E \
             -e "s|^application/app_store_team_id=.*|application/app_store_team_id=\"${APPLE_TEAM_ID}\"|" \
             -e "s|^application/bundle_identifier=.*|application/bundle_identifier=\"${BUNDLE_ID}\"|" \
             -e "s|^application/short_version=.*|application/short_version=\"${MARKETING_VERSION}\"|" \
-            -e "s|^application/version=.*|application/version=\"${BUILD_NUMBER}\"|" \
+            -e "s|^application/version=.*|application/version=\"${BUILD}\"|" \
             export_presets.cfg
           grep -E "^application/(app_store_team_id|bundle_identifier|short_version|version)=" export_presets.cfg
       - name: Import assets
@@ -123,7 +138,7 @@ workflows:
         - padel_keystore
       vars:
         GODOT_VERSION: "4.6.1"
-        PACKAGE_NAME: com.REPLACE.padel
+        PACKAGE_NAME: com.davidtanner.padel
         VERSION_NAME: "0.1.0"
     # triggering:
     #   events: [push]
