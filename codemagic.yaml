@@ -1,0 +1,156 @@
+# Codemagic CI for Padel (Godot 4.6.1)
+#
+#   ios-testflight : Godot exports the Xcode project → Codemagic signs it →
+#                    IPA → uploaded to TestFlight
+#   android-apk    : signed release APK, downloadable from the build page
+#
+# One-time setup in Codemagic (see README → "Builds with Codemagic"):
+#   1. Teams → Integrations → App Store Connect: add an API key and name it
+#      "Padel ASC" (or change `app_store_connect:` below to match).
+#   2. Fill in BUNDLE_ID / APPLE_TEAM_ID / PACKAGE_NAME below (both places
+#      for iOS: the ios_signing block and vars).
+#   3. Android: Code signing identities → Android keystores: upload a
+#      keystore with reference name "padel_keystore" (keystore password and
+#      key password must be the same for Godot).
+#
+# Builds are started manually from the Codemagic dashboard. Uncomment the
+# `triggering` blocks to build on every push to main.
+
+definitions:
+  scripts:
+    - &set_godot_paths_mac
+      name: Install Godot and iOS export template
+      script: |
+        set -euo pipefail
+        cd "$HOME"
+        curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+        unzip -q godot.zip
+        echo "GODOT=$HOME/Godot.app/Contents/MacOS/Godot" >> "$CM_ENV"
+        TPL="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+        mkdir -p "$TPL"
+        curl -fsSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+        unzip -q -j templates.tpz 'templates/ios.zip' 'templates/version.txt' -d "$TPL"
+        rm templates.tpz godot.zip
+    - &set_godot_paths_linux
+      name: Install Godot and Android export templates
+      script: |
+        set -euo pipefail
+        cd "$HOME"
+        curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+        unzip -q godot.zip
+        echo "GODOT=$HOME/Godot_v${GODOT_VERSION}-stable_linux.x86_64" >> "$CM_ENV"
+        TPL="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+        mkdir -p "$TPL"
+        curl -fsSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+        unzip -q -j templates.tpz 'templates/android_release.apk' 'templates/android_debug.apk' 'templates/version.txt' -d "$TPL"
+        rm templates.tpz godot.zip
+        # point Godot at Codemagic's Android SDK and JDK
+        mkdir -p "$HOME/.config/godot"
+        MINOR=$(echo "$GODOT_VERSION" | cut -d. -f1,2)
+        cat > "$HOME/.config/godot/editor_settings-${MINOR}.tres" <<EOF
+        [gd_resource type="EditorSettings" format=3]
+
+        [resource]
+        export/android/android_sdk_path = "${ANDROID_SDK_ROOT}"
+        export/android/java_sdk_path = "${JAVA_HOME}"
+        EOF
+        sed -i 's/^        //' "$HOME/.config/godot/editor_settings-${MINOR}.tres"
+
+workflows:
+  ios-testflight:
+    name: iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    integrations:
+      app_store_connect: Padel ASC
+    environment:
+      xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.REPLACE.padel
+      vars:
+        GODOT_VERSION: "4.6.1"
+        BUNDLE_ID: com.REPLACE.padel
+        APPLE_TEAM_ID: REPLACE_TEAM_ID
+        MARKETING_VERSION: "0.1.0"
+    # triggering:
+    #   events: [push]
+    #   branch_patterns:
+    #     - pattern: main
+    scripts:
+      - *set_godot_paths_mac
+      - name: Stamp bundle ID, team and build number into the iOS preset
+        script: |
+          set -euo pipefail
+          sed -i '' -E \
+            -e "s|^application/app_store_team_id=.*|application/app_store_team_id=\"${APPLE_TEAM_ID}\"|" \
+            -e "s|^application/bundle_identifier=.*|application/bundle_identifier=\"${BUNDLE_ID}\"|" \
+            -e "s|^application/short_version=.*|application/short_version=\"${MARKETING_VERSION}\"|" \
+            -e "s|^application/version=.*|application/version=\"${BUILD_NUMBER}\"|" \
+            export_presets.cfg
+          grep -E "^application/(app_store_team_id|bundle_identifier|short_version|version)=" export_presets.cfg
+      - name: Import assets
+        script: |
+          "$GODOT" --headless --path . --import
+      - name: Export Xcode project
+        script: |
+          set -euo pipefail
+          mkdir -p build/ios
+          "$GODOT" --headless --path . --export-release "iOS" build/ios/Padel.ipa
+          test -d build/ios/Padel.xcodeproj
+      - name: Apply signing profiles
+        script: |
+          xcode-project use-profiles --project build/ios/Padel.xcodeproj
+      - name: Build IPA
+        script: |
+          xcode-project build-ipa --project build/ios/Padel.xcodeproj --scheme Padel
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # beta_groups:            # external testers need a Beta App Review first
+        #   - Playtesters
+
+  android-apk:
+    name: Android → signed APK
+    instance_type: linux_x2
+    max_build_duration: 30
+    environment:
+      android_signing:
+        - padel_keystore
+      vars:
+        GODOT_VERSION: "4.6.1"
+        PACKAGE_NAME: com.REPLACE.padel
+        VERSION_NAME: "0.1.0"
+    # triggering:
+    #   events: [push]
+    #   branch_patterns:
+    #     - pattern: main
+    scripts:
+      - *set_godot_paths_linux
+      - name: Stamp package name and version into the Android preset
+        script: |
+          set -euo pipefail
+          sed -i -E \
+            -e "s|^package/unique_name=.*|package/unique_name=\"${PACKAGE_NAME}\"|" \
+            -e "s|^version/name=.*|version/name=\"${VERSION_NAME}\"|" \
+            -e "s|^version/code=.*|version/code=${BUILD_NUMBER}|" \
+            export_presets.cfg
+          grep -E "^(package/unique_name|version/name|version/code)=" export_presets.cfg
+      - name: Import assets
+        script: |
+          "$GODOT" --headless --path . --import
+      - name: Export signed APK
+        script: |
+          set -euo pipefail
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$CM_KEYSTORE_PATH"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_USER="$CM_KEY_ALIAS"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="$CM_KEYSTORE_PASSWORD"
+          mkdir -p build/android
+          "$GODOT" --headless --path . --export-release "Android" build/android/Padel.apk
+          test -f build/android/Padel.apk
+    artifacts:
+      - build/android/*.apk

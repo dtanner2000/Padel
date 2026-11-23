@@ -1,0 +1,15 @@
+# Godot
+.godot/
+*.translation
+export_credentials.cfg
+/android/
+
+# builds
+build/
+
+# relay server
+server/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

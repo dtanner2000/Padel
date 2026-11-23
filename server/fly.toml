@@ -1,0 +1,28 @@
+# Fly.io config for the Padel relay. Deploy with:  fly launch --copy-config --no-deploy  then  fly deploy
+app = "padel-relay"            # must be unique on Fly; change if taken, and update RELAY_URL in scripts/online.gd
+primary_region = "lhr"         # London; players connect here
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"   # keep it up: matches live in memory
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 2000
+    hard_limit = 4000
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
