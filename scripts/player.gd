@@ -402,6 +402,25 @@ func _drive_model() -> void:
 		var wrist := _skel.global_transform * _skel.get_bone_global_pose(h).origin
 		var along := (_hand.global_position - _elbow.global_position).normalized()
 		_grip.global_position = wrist + along * 0.07   # into the palm, not the wrist
+		_grip.global_basis = _paddle_basis(along)
+
+
+## World orientation for the held paddle: the shaft follows the forearm with the
+## wrist cocked up (head up at the ready, straight up on a smash), and the face
+## turns as square to the net as the shaft allows.
+const WRIST_COCK := 1.0
+func _paddle_basis(forearm: Vector3) -> Basis:
+	var fwd := -_torso.global_basis.z
+	var f := forearm
+	var back := -f.dot(fwd)
+	if back > 0.0:
+		f += fwd * back            # never let the head lean back towards the camera
+	var axis := (f + Vector3.UP * WRIST_COCK + fwd * 0.15).normalized()
+	var face := fwd - axis * fwd.dot(axis)
+	if face.length() < 0.15:
+		face = _torso.global_basis.x.cross(axis)
+	face = face.normalized()
+	return Basis(axis.cross(face), axis, face)
 
 
 ## Floating name above the player; "" hides it (your own player has none).
