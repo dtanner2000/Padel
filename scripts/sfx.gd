@@ -70,7 +70,7 @@ func crowd(big := false) -> void:
 	var key := "applause_big" if big else "applause"
 	if _streams.has(key):
 		_crowd.stream = _streams[key]
-		_crowd.volume_db = linear_to_db(clampf(crowd_level * (1.0 if big else 0.8), 0.05, 1.0)) - 3.0
+		_crowd.volume_db = linear_to_db(clampf(crowd_level * (1.0 if big else 0.8), 0.05, 1.0)) - 4.2   # about 13 % quieter than first mixed
 		_crowd.pitch_scale = randf_range(0.95, 1.05)
 		_crowd.play()
 
