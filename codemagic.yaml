@@ -47,11 +47,35 @@ workflows:
       - name: Fetch signing files
         script: |
           set -e
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --platform IOS \
-            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
-            --create
+          # Game Center must be on the App ID, and the profile must have been
+          # made after it was switched on: stale profiles are deleted and remade.
+          BID=$(app-store-connect bundle-ids list --bundle-id-identifier "$BUNDLE_ID" --strict-match-identifier --json | jq -r '.[0].id')
+          echo "Bundle id resource: $BID"
+          app-store-connect bundle-ids enable-capabilities "$BID" --capability GAME_CENTER || echo "(Game Center already on)"
+          fetch() {
+            app-store-connect fetch-signing-files "$BUNDLE_ID" \
+              --type IOS_APP_STORE \
+              --platform IOS \
+              --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
+              --create
+          }
+          fetch
+          PROFILES="$HOME/Library/MobileDevice/Provisioning Profiles"
+          STALE=0
+          for f in "$PROFILES"/*.mobileprovision; do
+            [ -e "$f" ] || continue
+            security cms -D -i "$f" > /tmp/p.plist
+            if grep -q "$BUNDLE_ID" /tmp/p.plist && ! grep -q "com.apple.developer.game-center" /tmp/p.plist; then
+              UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /tmp/p.plist)
+              echo "Profile $UUID has no Game Center: deleting it"
+              for PID in $(app-store-connect profiles list --bundle-id-resource-id "$BID" --json | jq -r --arg u "$UUID" '.[] | select(.attributes.uuid == $u) | .id'); do
+                app-store-connect profiles delete "$PID"
+              done
+              rm -f "$f"
+              STALE=1
+            fi
+          done
+          if [ "$STALE" = 1 ]; then fetch; fi
           keychain initialize
           keychain add-certificates
 
