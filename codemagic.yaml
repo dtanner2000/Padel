@@ -111,7 +111,15 @@ workflows:
           set -e
           cd "$CM_BUILD_DIR"
           xcode-project use-profiles
-          xcode-project build-ipa --project build/ios/Padel.xcodeproj --scheme Padel
+          xcode-project build-ipa --project build/ios/Padel.xcodeproj --scheme Padel || {
+            # print the real Xcode errors (the default log only says "Failed to archive")
+            L=$(ls -t /tmp/xcodebuild_logs/*.log | head -1)
+            echo "=== errors from $L ==="
+            grep -nE "error:|Provisioning profile|entitlement|Undefined symbol|ld: " "$L" | head -60
+            echo "=== last 80 lines ==="
+            tail -80 "$L"
+            exit 1
+          }
 
     artifacts:
       - build/ios/ipa/*.ipa
