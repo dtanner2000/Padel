@@ -1,5 +1,5 @@
 extends SceneTree
-# renders the player rig in a few poses: godot --path . -s tools/pose_test.gd -- out_prefix
+# renders the player rig in a few poses: godot --path . -s tools/pose_test.gd -- out_prefix [res://model.glb]
 var frames := 0
 var players: Array = []
 func _init():
@@ -15,6 +15,8 @@ func _init():
 		p.position = Vector3((i % 3 - 1) * 1.6, 0, 0 if i < 3 else -30)
 		if i >= 3: p.rotation.y = PI
 		root3.add_child(p)
+		if OS.get_cmdline_user_args().size() > 1:
+			p.use_model(load(OS.get_cmdline_user_args()[1]))
 		players.append(p)
 	var cam := Camera3D.new(); cam.position = Vector3(1.2, 1.6, 4.2); root3.add_child(cam)
 	cam.fov = 45; cam.current = true; cam.look_at_from_position(Vector3(1.2, 1.6, 4.2), Vector3(0, 1.0, 0))

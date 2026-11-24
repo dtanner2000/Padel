@@ -1,0 +1,13 @@
+{
+  "name": "padel-gltf-tools",
+  "private": true,
+  "description": "Slims Higgsfield/Meshy character GLBs for mobile: drops baked animation and unused data, 1024px JPEG texture.",
+  "type": "module",
+  "scripts": { "optimise": "node optimise.mjs" },
+  "dependencies": {
+    "@gltf-transform/core": "4.1.1",
+    "@gltf-transform/extensions": "4.1.1",
+    "@gltf-transform/functions": "4.1.1",
+    "sharp": "0.33.5"
+  }
+}

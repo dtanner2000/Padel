@@ -309,6 +309,8 @@ func _spawn_players() -> void:
 	# a person's player starts, stops and turns almost instantly
 	players[0].accel = 48.0
 	players[0].speed = 5.0
+	# Higgsfield/Meshy test character for you (the others are still procedural)
+	players[0].use_model(preload("res://assets/characters/you.glb"))
 
 
 func _make_aim_marker() -> void:

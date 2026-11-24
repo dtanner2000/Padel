@@ -37,6 +37,18 @@ var _hip_l: Node3D
 var _hip_r: Node3D
 var _swing: Tween
 var _tag: Label3D
+var _grip: Node3D           # the paddle, held in the hand
+var _off_hand: Node3D
+var _knee_l: Node3D
+var _knee_r: Node3D
+
+# optional skinned character model (Higgsfield/Meshy GLB): the procedural rig
+# above becomes an invisible driver, and the model's bones are aimed at it
+var _model: Node3D
+var _skel: Skeleton3D
+var _bones := {}            # name -> index
+const MODEL_BONES := ["Spine01", "LeftArm", "LeftForeArm", "LeftHand", "RightArm", "RightForeArm", "RightHand",
+	"LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot"]
 var _run_phase := 0.0
 var _swinging := false
 
@@ -165,6 +177,8 @@ func _process(delta: float) -> void:
 	if not _swinging:
 		# paddle arm breathes a little in the ready position
 		_shoulder.rotation = POSE_READY[0] + Vector3(sin(_run_phase * 0.5) * 0.04, 0, 0)
+	if _skel:
+		_drive_model()
 
 
 # --- visuals ------------------------------------------------------------------
@@ -230,10 +244,14 @@ func _build() -> void:
 		var sole := BoxMesh.new()
 		sole.size = Vector3(0.125, 0.025, 0.28)
 		_part(hip, sole, Vector3(0, -0.82, -0.05), shirt.darkened(0.1))
+		var knee := _joint(hip, Vector3(0, -0.42, 0))
+		_joint(knee, Vector3(0, -0.4, 0)).name = "Ankle"
 		if side < 0.0:
 			_hip_l = hip
+			_knee_l = knee
 		else:
 			_hip_r = hip
+			_knee_r = knee
 
 	_torso = _joint(_body, Vector3(0, 0.82, 0))
 	var shorts := CylinderMesh.new()
@@ -259,6 +277,7 @@ func _build() -> void:
 	var off_elbow := _joint(_off_shoulder, Vector3(0, -0.28, 0))
 	off_elbow.rotation.x = -0.6
 	_part(off_elbow, _capsule(0.05, 0.3), Vector3(0, -0.13, 0), skin)
+	_off_hand = _joint(off_elbow, Vector3(0, -0.28, 0))
 
 	# paddle arm: shoulder → elbow → hand, each segment hanging along -y
 	_shoulder = _joint(_torso, Vector3(0.24, 0.6, 0))
@@ -292,6 +311,7 @@ func _build() -> void:
 ## bends the head up so the face points at the net in the ready position.
 func _build_paddle(hand: Node3D) -> void:
 	var grip := _joint(hand, Vector3.ZERO)
+	_grip = grip
 	# forearm runs forward-down in the ready pose; this bend stands the paddle up
 	grip.rotation = Vector3(PI * 0.5 + 0.05, 0, -0.25)
 	var dark := Color("1a1d22")
@@ -323,6 +343,65 @@ func _build_paddle(hand: Node3D) -> void:
 	var edge := _part(grip, rim, Vector3(0, 0.33, 0), trim)
 	edge.rotation.x = PI * 0.5
 	edge.scale = Vector3(1.0, 1.0, 1.12)
+
+
+# --- skinned model ---------------------------------------------------------------
+
+## Swap the procedural body for a rigged character (humanoid GLB, Meshy/Mixamo
+## bone names, facing +Z as Meshy exports). The procedural joints keep
+## animating, unseen, and drive the model's bones every frame.
+func use_model(scene: PackedScene) -> void:
+	if _body == null:
+		await ready
+	_model = scene.instantiate()
+	_model.rotation.y = PI          # Meshy faces +Z; players face -Z
+	_body.add_child(_model)
+	var found := _model.find_children("*", "Skeleton3D", true, false)
+	if found.is_empty():
+		push_warning("character model has no skeleton")
+		return
+	_skel = found[0]
+	for b in MODEL_BONES:
+		_bones[b] = _skel.find_bone(b)
+	# hide the procedural body; keep the paddle and name tag
+	for mi in _body.find_children("*", "MeshInstance3D", true, false):
+		if not (_grip.is_ancestor_of(mi) or _model.is_ancestor_of(mi)):
+			(mi as MeshInstance3D).visible = false
+	for mi in _model.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+
+## Point `bone` (which runs towards `child`) at a world-space target.
+func _aim_bone(bone: String, child: String, target_world: Vector3) -> void:
+	var i: int = _bones.get(bone, -1)
+	var c: int = _bones.get(child, -1)
+	if i < 0 or c < 0:
+		return
+	_skel.set_bone_pose_rotation(i, _skel.get_bone_rest(i).basis.get_rotation_quaternion())
+	var gp := _skel.get_bone_global_pose(i)
+	var along := (gp.basis * _skel.get_bone_rest(c).origin).normalized()
+	var want := (_skel.global_transform.affine_inverse() * target_world - gp.origin).normalized()
+	if along.is_zero_approx() or want.is_zero_approx() or along.dot(want) > 0.99999:
+		return
+	gp.basis = Basis(Quaternion(along, want)) * gp.basis
+	_skel.set_bone_global_pose(i, gp)
+
+
+func _drive_model() -> void:
+	_aim_bone("RightArm", "RightForeArm", _elbow.global_position)
+	_aim_bone("RightForeArm", "RightHand", _hand.global_position)
+	_aim_bone("LeftArm", "LeftForeArm", _off_hand.get_parent_node_3d().global_position)
+	_aim_bone("LeftForeArm", "LeftHand", _off_hand.global_position)
+	_aim_bone("LeftUpLeg", "LeftLeg", _knee_l.global_position)
+	_aim_bone("LeftLeg", "LeftFoot", _knee_l.get_node("Ankle").global_position)
+	_aim_bone("RightUpLeg", "RightLeg", _knee_r.global_position)
+	_aim_bone("RightLeg", "RightFoot", _knee_r.get_node("Ankle").global_position)
+	# the paddle sits in the model's real hand
+	var h: int = _bones.get("RightHand", -1)
+	if h >= 0:
+		var wrist := _skel.global_transform * _skel.get_bone_global_pose(h).origin
+		var along := (_hand.global_position - _elbow.global_position).normalized()
+		_grip.global_position = wrist + along * 0.07   # into the palm, not the wrist
 
 
 ## Floating name above the player; "" hides it (your own player has none).
