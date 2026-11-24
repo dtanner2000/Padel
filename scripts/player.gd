@@ -166,6 +166,7 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 		var m := StandardMaterial3D.new()
 		m.albedo_color = hat_col
 		m.roughness = 0.7
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		var add := func(mesh: Mesh, pos: Vector3, rot := Vector3.ZERO, scl := Vector3.ONE) -> void:
 			var mi := MeshInstance3D.new()
 			mi.mesh = mesh
@@ -190,16 +191,25 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 				peak.height = 0.01
 				add.call(peak, Vector3(0, 0.205, 0.12), Vector3(-0.3, 0, 0), Vector3(1.1, 1.0, 1.0))
 			"cap":
+				# crown: a full-height dome sitting low enough to cover the hair,
+				# tipped forward so the front edge meets the forehead
 				var dome := SphereMesh.new()
-				dome.radius = 0.105
-				dome.height = 0.11
+				dome.radius = 0.127
+				dome.height = 0.13
 				dome.is_hemisphere = true
-				add.call(dome, Vector3(0, 0.19, -0.005), Vector3(-0.15, 0, 0), Vector3(1.05, 1.0, 1.15))
-				var bill := CylinderMesh.new()
-				bill.top_radius = 0.085
-				bill.bottom_radius = 0.085
-				bill.height = 0.012
-				add.call(bill, Vector3(0, 0.2, 0.125), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.0))
+				dome.radial_segments = 28
+				dome.rings = 10
+				add.call(dome, Vector3(0, CAP_BASE, 0.014), Vector3(-0.2, 0, 0), Vector3(0.95, 1.0, 1.1))
+				var button := SphereMesh.new()
+				button.radius = 0.012
+				button.height = 0.024
+				add.call(button, Vector3(0, CAP_BASE + 0.128, -0.008))
+				var brim := MeshInstance3D.new()
+				brim.mesh = _cap_brim()
+				brim.position = Vector3(0, CAP_BASE - 0.004, 0.014)
+				brim.rotation.x = -0.2
+				brim.material_override = m
+				holder.add_child(brim)
 	if _band == null:
 		var bm := CylinderMesh.new()
 		bm.top_radius = 0.045
@@ -209,6 +219,37 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 		_band.top_level = true
 	_band.visible = band_col.a > 0.0
 	(_band.material_override as StandardMaterial3D).albedo_color = band_col
+
+
+const CAP_BASE := 0.158    # cap crown rim height above the head bone (m)
+
+
+## A cap peak: the front half of a ring, longest at the front, tapering to the
+## sides and curving down at the edges like a worn-in brim. Double-sided.
+static func _cap_brim() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n := 18
+	var inner := Vector2(0.127 * 0.95, 0.127 * 1.1)   # crown rim (x, z radii)
+	var pts: Array = []
+	for i in n + 1:
+		var a := lerpf(-PI * 0.42, PI * 0.42, float(i) / n)   # around the front only
+		var s := sin(a)
+		var c := cos(a)
+		var length := 0.085 * pow(c, 0.8)                     # longest straight ahead
+		var droop := -0.022 * s * s                            # edges curl down
+		var p_in := Vector3(s * inner.x, 0.0, c * inner.y)
+		var p_out := Vector3(s * (inner.x + length * 0.35), droop - 0.006 * c, c * (inner.y + length))
+		pts.append([p_in, p_out])
+	for i in n:
+		var a0: Array = pts[i]
+		var a1: Array = pts[i + 1]
+		for tri in [[a0[0], a0[1], a1[1]], [a0[0], a1[1], a1[0]]]:
+			for v in tri:
+				st.set_normal(Vector3.UP)
+				st.add_vertex(v)
+	st.generate_normals()
+	return st.commit()
 
 
 ## Rename (tag over the head for everyone but your own player).
