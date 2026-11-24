@@ -60,11 +60,14 @@ workflows:
               --create
           }
           fetch
-          PROFILES="$HOME/Library/MobileDevice/Provisioning Profiles"
           STALE=0
-          for f in "$PROFILES"/*.mobileprovision; do
+          # newer Xcode keeps profiles in UserData; older in MobileDevice: check both
+          for f in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision \
+                   "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
             [ -e "$f" ] || continue
             security cms -D -i "$f" > /tmp/p.plist
+            echo "Profile: $f"
+            /usr/libexec/PlistBuddy -c "Print Entitlements" /tmp/p.plist | grep -iE "game-center|application-identifier" || true
             if grep -q "$BUNDLE_ID" /tmp/p.plist && ! grep -q "com.apple.developer.game-center" /tmp/p.plist; then
               UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /tmp/p.plist)
               echo "Profile $UUID has no Game Center: deleting it"
