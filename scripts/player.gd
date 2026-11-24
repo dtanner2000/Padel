@@ -38,6 +38,10 @@ var _hip_r: Node3D
 var _swing: Tween
 var _tag: Label3D
 var _grip: Node3D           # the paddle, held in the hand
+var _fist: MeshInstance3D   # closed fingers round the handle (character models only)
+const FIST_Y := 0.045       # where the hand closes on the handle, from the grip origin
+const PALM := 0.06          # wrist bone -> centre of the (shrunk) palm, along the forearm
+const HAND_SHRINK := 0.55   # the model's open paddle hand, tucked inside the fist
 var _off_hand: Node3D
 var _knee_l: Node3D
 var _knee_r: Node3D
@@ -316,6 +320,16 @@ func _build_paddle(hand: Node3D) -> void:
 	grip.rotation = Vector3(PI * 0.5 + 0.05, 0, -0.25)
 	var dark := Color("1a1d22")
 	var trim := Color("c6f432") if team == 0 else Color("7b5cd6")
+	# closed fingers round the handle: hidden for the procedural body, shown (in the
+	# model's own skin tone) when a character model is used, whose hands are open
+	var fist := SphereMesh.new()
+	fist.radius = 0.043
+	fist.height = 0.11
+	fist.radial_segments = 12
+	fist.rings = 6
+	_fist = _part(grip, fist, Vector3(0, FIST_Y, 0), Color.WHITE)
+	_fist.scale = Vector3(1.0, 1.0, 0.85)
+	_fist.visible = false
 	var handle := CylinderMesh.new()
 	handle.top_radius = 0.018
 	handle.bottom_radius = 0.02
@@ -370,6 +384,57 @@ func use_model(scene: PackedScene) -> void:
 			(mi as MeshInstance3D).visible = false
 	for mi in _model.find_children("*", "MeshInstance3D", true, false):
 		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var tone: Variant = _hand_tone()
+	if tone != null:
+		_fist.material_override = _mat(tone)
+		_fist.visible = true
+		# the model's hand is modelled open; shrink it so the fist reads as the grip
+		var h := _skel.find_bone("RightHand")
+		_skel.set_bone_pose_scale(h, _skel.get_bone_rest(h).basis.get_scale() * HAND_SHRINK)
+
+
+## Average colour of the model's right hand (vertices mostly bound to
+## RightHand, sampled from the albedo texture), so the closed fist matches the
+## skin. null if it can't be read.
+func _hand_tone() -> Variant:
+	var hand := _skel.find_bone("RightHand")
+	for n in _model.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.skin == null or mi.mesh == null:
+			continue
+		var bind := -1
+		for b in mi.skin.get_bind_count():
+			if mi.skin.get_bind_bone(b) == hand or mi.skin.get_bind_name(b) == &"RightHand":
+				bind = b
+		var mat := mi.get_active_material(0) as BaseMaterial3D
+		if bind < 0 or mat == null or mat.albedo_texture == null:
+			continue
+		var img := mat.albedo_texture.get_image()
+		if img == null:
+			continue
+		if img.is_compressed() and img.decompress() != OK:
+			continue
+		var arr := mi.mesh.surface_get_arrays(0)
+		var bones: PackedInt32Array = arr[Mesh.ARRAY_BONES]
+		var weights: PackedFloat32Array = arr[Mesh.ARRAY_WEIGHTS]
+		var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+		if uvs.is_empty() or bones.is_empty():
+			continue
+		var per := bones.size() / uvs.size()
+		var sum := Vector3.ZERO
+		var count := 0
+		for v in uvs.size():
+			for k in per:
+				if bones[v * per + k] == bind and weights[v * per + k] > 0.85:
+					var uv := uvs[v]
+					var c := img.get_pixel(clampi(int(uv.x * img.get_width()), 0, img.get_width() - 1),
+						clampi(int(uv.y * img.get_height()), 0, img.get_height() - 1))
+					sum += Vector3(c.r, c.g, c.b)
+					count += 1
+		if count > 10:
+			sum /= count
+			return Color(sum.x, sum.y, sum.z) * mat.albedo_color
+	return null
 
 
 ## Aim a two-bone limb (upper -> lower -> end) so the joint lands on `mid_world`
@@ -416,8 +481,10 @@ func _drive_model() -> void:
 	# the paddle sits in the model's real hand
 	if wrist != null:
 		var along := (_hand.global_position - _elbow.global_position).normalized()
-		_grip.global_position = _skel.global_transform * (wrist as Vector3) + along * 0.07   # into the palm
-		_grip.global_basis = _paddle_basis(along)
+		var basis := _paddle_basis(along)
+		var palm := _skel.global_transform * (wrist as Vector3) + along * PALM
+		_grip.global_basis = basis
+		_grip.global_position = palm - basis.y * FIST_Y   # the handle runs through the palm
 
 
 ## World orientation for the held paddle: the shaft follows the forearm with the
