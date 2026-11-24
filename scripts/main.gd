@@ -309,8 +309,12 @@ func _spawn_players() -> void:
 	# a person's player starts, stops and turns almost instantly
 	players[0].accel = 48.0
 	players[0].speed = 5.0
-	# Higgsfield/Meshy test character for you (the others are still procedural)
-	players[0].use_model(preload("res://assets/characters/you.glb"))
+	# generated characters (Higgsfield -> Meshy); any that are missing keep the procedural body
+	var models := ["you", "ana", "marco", "leo"]   # same order as defs above
+	for i in players.size():
+		var path := "res://assets/characters/%s.glb" % models[i]
+		if ResourceLoader.exists(path):
+			players[i].use_model(load(path))
 
 
 func _make_aim_marker() -> void:
