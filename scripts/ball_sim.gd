@@ -19,6 +19,9 @@ var vel := Vector3.ZERO
 ## -1 = heavy backspin (slice) .. +1 = topspin. Backspin keeps the bounce low
 ## and skidding, and makes the ball die off the glass. Halves on every bounce.
 var spin := 0.0
+## Steady wind on outdoor courts (m/s² of drift). Static so the live ball and
+## every prediction feel the same wind.
+static var wind := Vector3.ZERO
 
 
 func copy() -> BallSim:
@@ -33,6 +36,7 @@ func step(dt: float) -> Array:
 	var events: Array = []
 	var prev := pos
 	vel.y -= GRAVITY * dt
+	vel += wind * dt
 	pos += vel * dt
 
 	# net: did we cross z = 0 below the tape?

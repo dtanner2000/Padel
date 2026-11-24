@@ -59,6 +59,9 @@ const MODEL_BONES := ["Spine01", "LeftArm", "LeftForeArm", "LeftHand", "RightArm
 	"LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot"]
 var _run_phase := 0.0
 var _swinging := false
+var replaying := false     # a replay is posing the rig: skip the live animation
+var _hat: Node3D           # cosmetic headwear, on the model's head bone
+var _band: MeshInstance3D  # cosmetic wristband on the paddle arm
 
 # Paddle-arm poses, written as where the upper arm and the forearm point, in
 # the player's own frame: +x = out to the paddle side, +y = up, -z = forwards
@@ -122,6 +125,90 @@ func _ready() -> void:
 	_ring.material_override = m
 	_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_ring)
+
+
+## The pose of the whole rig, for replays (see apply_rig_state).
+func rig_state() -> Array:
+	return [position, rotation.y, _body.rotation.x, _body.position.y, _hip_l.rotation.x, _hip_r.rotation.x,
+		_off_shoulder.rotation.x, _torso.rotation.y, _shoulder.quaternion, _elbow.rotation.x, visible]
+
+
+func apply_rig_state(a: Array) -> void:
+	position = a[0]
+	rotation.y = a[1]
+	_body.rotation.x = a[2]
+	_body.position.y = a[3]
+	_hip_l.rotation.x = a[4]
+	_hip_r.rotation.x = a[5]
+	_off_shoulder.rotation.x = a[6]
+	_torso.rotation.y = a[7]
+	_shoulder.quaternion = a[8]
+	_elbow.rotation.x = a[9]
+	visible = a[10]
+
+
+## Cosmetics: headwear ("" | "headband" | "cap" | "visor") and wristband colour
+## (transparent = none). Needs a character model (attached to its head bone).
+func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
+	if _skel == null:
+		return
+	if _hat:
+		_hat.queue_free()
+		_hat = null
+	if hat != "":
+		var att := BoneAttachment3D.new()
+		att.bone_name = "Head"
+		_skel.add_child(att)
+		_hat = att
+		var holder := Node3D.new()
+		holder.scale = Vector3.ONE * 100.0   # the skeleton is in centimetres
+		att.add_child(holder)
+		var m := StandardMaterial3D.new()
+		m.albedo_color = hat_col
+		m.roughness = 0.7
+		var add := func(mesh: Mesh, pos: Vector3, rot := Vector3.ZERO, scl := Vector3.ONE) -> void:
+			var mi := MeshInstance3D.new()
+			mi.mesh = mesh
+			mi.material_override = m
+			mi.position = pos
+			mi.rotation = rot
+			mi.scale = scl
+			holder.add_child(mi)
+		var ring := CylinderMesh.new()
+		ring.top_radius = 0.098
+		ring.bottom_radius = 0.1
+		ring.height = 0.035
+		ring.radial_segments = 16
+		match hat:
+			"headband":
+				add.call(ring, Vector3(0, 0.2, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
+			"visor":
+				add.call(ring, Vector3(0, 0.2, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
+				var peak := CylinderMesh.new()
+				peak.top_radius = 0.08
+				peak.bottom_radius = 0.08
+				peak.height = 0.01
+				add.call(peak, Vector3(0, 0.205, 0.12), Vector3(-0.3, 0, 0), Vector3(1.1, 1.0, 1.0))
+			"cap":
+				var dome := SphereMesh.new()
+				dome.radius = 0.105
+				dome.height = 0.11
+				dome.is_hemisphere = true
+				add.call(dome, Vector3(0, 0.19, -0.005), Vector3(-0.15, 0, 0), Vector3(1.05, 1.0, 1.15))
+				var bill := CylinderMesh.new()
+				bill.top_radius = 0.085
+				bill.bottom_radius = 0.085
+				bill.height = 0.012
+				add.call(bill, Vector3(0, 0.2, 0.125), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.0))
+	if _band == null:
+		var bm := CylinderMesh.new()
+		bm.top_radius = 0.045
+		bm.bottom_radius = 0.048
+		bm.height = 0.06
+		_band = _part(_grip, bm, Vector3(0, -0.06, 0), Color.BLACK)
+		_band.top_level = true
+	_band.visible = band_col.a > 0.0
+	(_band.material_override as StandardMaterial3D).albedo_color = band_col
 
 
 ## Rename (tag over the head for everyone but your own player).
@@ -211,6 +298,10 @@ func swing(kind := "drive") -> void:
 
 func _process(delta: float) -> void:
 	if _body == null:
+		return
+	if replaying:
+		if _skel:
+			_drive_model()
 		return
 	var run := clampf(vel.length() / maxf(speed, 0.1), 0.0, 1.0)
 	_run_phase += delta * (4.0 + 7.0 * run)
@@ -560,6 +651,9 @@ func _drive_model() -> void:
 		var palm := _skel.global_transform * (wrist as Vector3) + along * PALM
 		_grip.global_basis = basis
 		_grip.global_position = palm - basis.y * FIST_Y   # the handle runs through the palm
+		if _band and _band.visible:
+			var wrist_w := _skel.global_transform * (wrist as Vector3)
+			_band.global_transform = Transform3D(Basis(Quaternion(Vector3.UP, -along)), wrist_w - along * 0.04)
 
 
 ## World orientation for the held paddle: the shaft follows the forearm with the

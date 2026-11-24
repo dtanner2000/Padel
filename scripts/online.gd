@@ -6,7 +6,7 @@ extends Node
 
 signal status(text: String)
 signal room_code(code: String)
-signal matched(is_host: bool, length: String, golden: bool)
+signal matched(is_host: bool, length: String, golden: bool, size: int)
 signal failed(msg: String)
 
 ## The deployed relay. Must be wss:// with a hostname (Apple review uses
@@ -38,10 +38,17 @@ func quick(length := "quick") -> void:
 		peer.send_control({"t": "quick", "length": length, "rating": Profile.rating()})
 
 
-func create(length: String, golden: bool) -> void:
+## size: 2 = you vs a friend (AI partners), 4 = doubles with up to four phones.
+func create(length: String, golden: bool, size := 2) -> void:
 	if _start():
 		status.emit("Creating your game…")
-		peer.send_control({"t": "create", "length": length, "golden": golden})
+		peer.send_control({"t": "create", "length": length, "golden": golden, "size": size})
+
+
+## Host of a doubles room: stop taking players and play (AI fills the gaps).
+func start_room() -> void:
+	if peer:
+		peer.send_control({"t": "start"})
 
 
 func join(code: String) -> void:
@@ -87,12 +94,11 @@ func _on_error(code: String, msg: String) -> void:
 		close()
 
 
-func _on_matched(is_host: bool, length: String, golden: bool) -> void:
+func _on_matched(is_host: bool, length: String, golden: bool, size: int) -> void:
 	searching_since = -1.0
 	multiplayer.multiplayer_peer = peer
-	matched.emit(is_host, length, golden)
-	# tell Godot's multiplayer that the other phone has arrived
-	peer.peer_connected.emit(RelayPeer.GUEST_ID if is_host else RelayPeer.HOST_ID)
+	matched.emit(is_host, length, golden, size)
+	# RelayPeer then announces the other phones (peer_connected) as they arrive
 
 
 func _process(_delta: float) -> void:

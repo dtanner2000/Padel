@@ -42,6 +42,13 @@ static func left_handed() -> bool: return get_v("settings", "left_handed", false
 static func button_scale() -> float: return [0.85, 1.0, 1.2][int(get_v("settings", "button_size", 1))]
 static func difficulty() -> int: return int(get_v("settings", "difficulty", 1))
 static func golden_point() -> bool: return get_v("settings", "golden_point", true)
+static func one_handed() -> bool: return get_v("settings", "one_handed", false)
+static func ball_trail() -> bool: return get_v("settings", "ball_trail", false)
+static func ball_contrast() -> bool: return get_v("settings", "ball_contrast", false)
+static func ball_large() -> bool: return get_v("settings", "ball_large", false)
+static func replays() -> bool: return get_v("settings", "replays", true)
+## Court colour override: "" = the venue's own.
+static func court_colour() -> String: return get_v("settings", "court_colour", "")
 
 
 static func vibrate(ms: int) -> void:
@@ -121,3 +128,25 @@ static func side() -> String: return get_v("team", "side", "left")
 
 
 static func rating() -> int: return int(get_v("online", "rating", 1000))
+
+
+# --- coins and cosmetics -----------------------------------------------------------
+
+static func coins() -> int: return stat("coins")
+
+
+static func owns(item: String) -> bool:
+	return get_v("owned", item, false)
+
+
+## Spend coins on an item; false if you can't afford it.
+static func buy(item: String, price: int) -> bool:
+	if owns(item) or price <= 0:
+		set_v("owned", item, true)
+		return true
+	if coins() < price:
+		return false
+	add_stat("coins", -price)
+	set_v("owned", item, true)
+	save()
+	return true

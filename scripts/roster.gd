@@ -42,21 +42,36 @@ const ROUNDS := ["Quarter-final", "Semi-final", "Final"]
 const VENUES := [
 	{"id": "club", "name": "Club Night", "sub": "Your local club, under the lights",
 		"court": Color("1d64a6"), "apron": Color("13263d"), "bg": Color("0c1a2e"), "ambient": Color("9fb6d6"),
-		"ambient_e": 0.45, "sun": 0.85, "lamps": 0.28, "rivals": [0.52, 0.58, 0.64], "partner": 0.72, "crowd": 0.5},
+		"ambient_e": 0.45, "sun": 0.85, "lamps": 0.28, "rivals": [0.52, 0.58, 0.64], "partner": 0.72, "crowd": 0.5,
+		"scene": "hall", "wind": 0.0},
 	{"id": "regional", "name": "Regional Open", "sub": "Outdoors on a sunny afternoon",
 		"court": Color("2f7d4e"), "apron": Color("2b4a33"), "bg": Color("8fc3e8"), "ambient": Color("dfe9f2"),
-		"ambient_e": 0.75, "sun": 1.25, "lamps": 0.0, "rivals": [0.62, 0.67, 0.72], "partner": 0.76, "crowd": 0.65},
-	{"id": "national", "name": "National Championship", "sub": "Sunset on the clay-red court",
+		"ambient_e": 0.75, "sun": 1.25, "lamps": 0.0, "rivals": [0.62, 0.67, 0.72], "partner": 0.76, "crowd": 0.65,
+		"scene": "park", "wind": 0.7},
+	{"id": "national", "name": "National Championship", "sub": "Sunset on the beach, clay-red court",
 		"court": Color("b04a2f"), "apron": Color("4a2a22"), "bg": Color("e48a5a"), "ambient": Color("ffd2b0"),
-		"ambient_e": 0.6, "sun": 1.0, "lamps": 0.12, "rivals": [0.7, 0.75, 0.8], "partner": 0.8, "crowd": 0.8},
-	{"id": "world", "name": "World Tour Finals", "sub": "Centre court, packed arena",
+		"ambient_e": 0.6, "sun": 1.0, "lamps": 0.12, "rivals": [0.7, 0.75, 0.8], "partner": 0.8, "crowd": 0.8,
+		"scene": "beach", "wind": 1.1},
+	{"id": "world", "name": "World Tour Finals", "sub": "Panoramic glass court, packed arena",
 		"court": Color("5a3fa8"), "apron": Color("1a1430"), "bg": Color("07060f"), "ambient": Color("b9a8ff"),
-		"ambient_e": 0.4, "sun": 0.7, "lamps": 0.42, "rivals": [0.78, 0.83, 0.9], "partner": 0.84, "crowd": 1.0},
+		"ambient_e": 0.4, "sun": 0.7, "lamps": 0.42, "rivals": [0.78, 0.83, 0.9], "partner": 0.84, "crowd": 1.0,
+		"scene": "arena", "wind": 0.0, "panoramic": true},
 ]
+
+## Courts for quick play only (not in the career), open from the start.
+const EXTRA_VENUES := [
+	{"id": "rooftop", "name": "City Rooftop", "sub": "Yellow court above the city lights, breezy",
+		"court": Color("d9b21f"), "apron": Color("2b2f36"), "bg": Color("0b1022"), "ambient": Color("aab8e8"),
+		"ambient_e": 0.5, "sun": 0.6, "lamps": 0.32, "rivals": [0.68, 0.7, 0.72], "partner": 0.74, "crowd": 0.35,
+		"scene": "rooftop", "wind": 1.4},
+]
+
+const COURT_COLOURS := {"blue": Color("1d64a6"), "green": Color("2f7d4e"), "red": Color("b04a2f"),
+	"yellow": Color("d9b21f"), "purple": Color("5a3fa8"), "pink": Color("d05a8f")}
 
 
 static func venue(id: String) -> Dictionary:
-	for v in VENUES:
+	for v in VENUES + EXTRA_VENUES:
 		if v.id == id:
 			return v
 	return VENUES[0]
@@ -122,3 +137,19 @@ static func tier(rating: int) -> String:
 		if rating >= t[0]:
 			name = t[1]
 	return name
+
+
+## Cosmetics, bought with coins earned by playing. Looks only.
+const HATS := [["", "None", 0], ["headband", "Headband", 80], ["visor", "Visor", 120], ["cap", "Cap", 150]]
+const WRISTBAND_PRICE := 60
+const PALETTE := [Color("f2f2f2"), Color("1a1d22"), Color("c6f432"), Color("ff5a4f"), Color("4fc3f7"),
+	Color("ffd34d"), Color("b07cff"), Color("ff8fc7")]
+## Paddle colourways over your paddle's shape: [id, name, face, trim, price].
+const SKINS := [
+	["", "Original", Color.BLACK, Color.BLACK, 0],
+	["ice", "Ice", Color("dff3ff"), Color("4fc3f7"), 100],
+	["lava", "Lava", Color("2a0a08"), Color("ff6a2a"), 100],
+	["mint", "Mint", Color("10302a"), Color("6dffc2"), 100],
+	["gold", "Gold", Color("1a1406"), Color("ffd34d"), 160],
+	["neon", "Neon", Color("0c0c14"), Color("ff3df2"), 160],
+]

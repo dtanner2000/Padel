@@ -9,7 +9,8 @@ signal hit_pressed
 signal mode_chosen(mode: String, golden_point: bool)
 signal quit_to_menu
 signal online_quick
-signal online_create(length: String, golden_point: bool)
+signal online_create(length: String, golden_point: bool, size: int)
+signal online_start_now
 signal online_join(code: String)
 signal online_closed
 signal play_ai_instead
@@ -69,6 +70,7 @@ var _sets: Array[Label] = []
 var _games: Array[Label] = []
 var _points: Array[Label] = []
 var _rally_panel: PanelContainer
+var _wind_label: Label
 var _rally_label: Label
 var _message: Label
 var _callout: Label
@@ -92,6 +94,10 @@ var _stats_grid: GridContainer
 var _longer: Control
 var _locker: Control
 var _locker_box: VBoxContainer
+var _wardrobe: Control
+var _wardrobe_box: VBoxContainer
+var _awards: Control
+var _awards_grid: GridContainer
 var _pause_menu: Control
 var _quit_btn: Button
 var _names: Array[Label] = []
@@ -103,6 +109,7 @@ var _online_status: Label
 var _code_label: Label
 var _code_edit: LineEdit
 var _ai_btn: Button
+var _start_btn: Button
 var net_mode := false:        # online match: pausing can't stop the game for the other phone
 	set(v):
 		net_mode = v
@@ -118,6 +125,9 @@ func _ready() -> void:
 
 	_build_scoreboard()
 	_build_rally()
+	_wind_label = _pill_label("", 13, Color.WHITE, PANEL)
+	_wind_label.visible = false
+	safe.add_child(_wind_label)
 
 	_message = _label("", 30, Color.WHITE)
 	_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -232,6 +242,12 @@ func show_room_code(code: String) -> void:
 	_online_status.text = "Send your friend this code. The match starts when they join."
 
 
+## Doubles room host: play with the phones that are here (AI fills the rest).
+func show_start_now(on: bool) -> void:
+	if _start_btn:
+		_start_btn.visible = on
+
+
 func show_ai_fallback(on: bool) -> void:
 	if _ai_btn.visible != on:
 		_ai_btn.visible = on
@@ -325,6 +341,20 @@ func update_score(s: MatchScore, serving_team: int) -> void:
 		_mode_label.text = "FIRST TO %d" % s.games_per_set
 	else:
 		_mode_label.text = "SET %d" % (s.sets[0] + s.sets[1] + 1)
+
+
+## Bottom pill during a replay; "" hides it.
+func set_banner(text: String) -> void:
+	_callout.text = text
+	_callout_t = 999.0 if text != "" else 0.0
+	_layout_message()
+
+
+## "" hides it.
+func set_wind(text: String) -> void:
+	_wind_label.text = text
+	_wind_label.visible = text != "" and not _menu.visible
+	_layout_message()
 
 
 func set_rally(n: int) -> void:
@@ -519,6 +549,8 @@ func _build_menu() -> void:
 		for i in Roster.VENUES.size():
 			if Profile.venue_unlocked(i):
 				open.append(Roster.VENUES[i].id)
+		for v in Roster.EXTRA_VENUES:
+			open.append(v.id)
 		var at := open.find(Profile.get_v("settings", "court", "club"))
 		Profile.set_v("settings", "court", open[(at + 1) % open.size()])
 		Profile.save()
@@ -530,6 +562,8 @@ func _build_menu() -> void:
 	_build_settings()
 	_build_stats()
 	_build_locker()
+	_build_wardrobe()
+	_build_awards()
 
 
 ## Menu labels that depend on saved state (team, AI level, court, today's best).
@@ -732,13 +766,20 @@ func _build_settings() -> void:
 
 
 const SETTINGS := [
-	["sound", "Sound", ["Off", "On"]],
-	["haptics", "Vibration", ["Off", "On"]],
-	["left_handed", "Controls", ["Right-handed", "Left-handed"]],
-	["button_size", "Button size", ["Small", "Medium", "Large"]],
-	["difficulty", "AI level", ["Easy", "Normal", "Hard"]],
-	["golden_point", "Golden point", ["Off", "On"]],
+	["sound", "Sound", ["Off", "On"], true],
+	["haptics", "Vibration", ["Off", "On"], true],
+	["left_handed", "Controls", ["Right-hand", "Left-hand"], false],
+	["one_handed", "One-handed", ["Off", "On"], false],
+	["button_size", "Buttons", ["S", "M", "L"], 1],
+	["difficulty", "AI level", ["Easy", "Normal", "Hard"], 1],
+	["golden_point", "Golden point", ["Off", "On"], true],
+	["replays", "Replays", ["Off", "On"], true],
+	["ball_trail", "Ball trail", ["Off", "On"], false],
+	["ball_contrast", "Ball colour", ["Classic", "Contrast"], false],
+	["ball_large", "Ball size", ["Normal", "Large"], false],
+	["court_colour", "Court colour", [], ""],
 ]
+const COURT_COLOURS := [["", "Venue"], ["blue", "Blue"], ["green", "Green"], ["red", "Red"], ["yellow", "Yellow"], ["purple", "Purple"], ["pink", "Pink"]]
 
 
 func show_settings(on: bool) -> void:
@@ -747,22 +788,40 @@ func show_settings(on: bool) -> void:
 		return
 	for c in _settings_box.get_children():
 		c.queue_free()
-	var current := {"sound": int(Profile.sound()), "haptics": int(Profile.haptics()),
-		"left_handed": int(Profile.left_handed()), "button_size": int(Profile.get_v("settings", "button_size", 1)),
-		"difficulty": Profile.difficulty(), "golden_point": int(Profile.golden_point())}
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 26)
+	grid.add_theme_constant_override("v_separation", 6)
+	_settings_box.add_child(grid)
 	for st in SETTINGS:
 		var key: String = st[0]
 		var row := HBoxContainer.new()
-		row.alignment = BoxContainer.ALIGNMENT_CENTER
-		row.add_theme_constant_override("separation", 6)
-		var l := _label(st[1], 16, Color.WHITE)
-		l.custom_minimum_size = Vector2(140, 0)
+		row.add_theme_constant_override("separation", 5)
+		var l := _label(st[1], 15, Color.WHITE)
+		l.custom_minimum_size = Vector2(112, 0)
 		row.add_child(l)
+		if key == "court_colour":
+			var cur: String = Profile.court_colour()
+			var idx := 0
+			for i in COURT_COLOURS.size():
+				if COURT_COLOURS[i][0] == cur:
+					idx = i
+			var cb := _button("%s  ›" % COURT_COLOURS[idx][1], 14, LIME if cur != "" else Color(1, 1, 1, 0.16), INK if cur != "" else Color.WHITE)
+			cb.custom_minimum_size = Vector2(250, 34)
+			cb.pressed.connect(func() -> void:
+				Profile.set_v("settings", "court_colour", COURT_COLOURS[(idx + 1) % COURT_COLOURS.size()][0])
+				Profile.save()
+				settings_changed.emit()
+				show_settings(true))
+			row.add_child(cb)
+			grid.add_child(row)
+			continue
+		var cur_v := int(Profile.get_v("settings", key, st[3]))
 		var opts: Array = st[2]
 		for i in opts.size():
-			var picked: bool = current[key] == i
-			var b := _button(opts[i], 14, LIME if picked else Color(1, 1, 1, 0.16), INK if picked else Color.WHITE)
-			b.custom_minimum_size = Vector2((366.0 - 6.0 * (opts.size() - 1)) / opts.size(), 36)
+			var picked: bool = cur_v == i
+			var b := _button(opts[i], 13, LIME if picked else Color(1, 1, 1, 0.16), INK if picked else Color.WHITE)
+			b.custom_minimum_size = Vector2((250.0 - 5.0 * (opts.size() - 1)) / opts.size(), 34)
 			b.pressed.connect(func() -> void:
 				var v: Variant = i if key in ["button_size", "difficulty"] else bool(i)
 				Profile.set_v("settings", key, v)
@@ -771,7 +830,7 @@ func show_settings(on: bool) -> void:
 				_layout()
 				show_settings(true))
 			row.add_child(b)
-		_settings_box.add_child(row)
+		grid.add_child(row)
 	_open(_settings)
 
 
@@ -841,6 +900,13 @@ func show_locker(on: bool) -> void:
 	var desc := _label("%s: %s" % [Roster.paddle(current).name, Roster.paddle(current).desc], 14, Color.WHITE)
 	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_locker_box.add_child(desc)
+	var wb := _button("Wardrobe  ·  %d coins" % Profile.coins(), 15, Color(1, 1, 1, 0.94), INK)
+	wb.custom_minimum_size = Vector2(260, 40)
+	wb.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	wb.pressed.connect(func() -> void:
+		_locker.visible = false
+		show_wardrobe(true))
+	_locker_box.add_child(wb)
 	_open(_locker)
 
 
@@ -850,14 +916,144 @@ func _pips(v: float) -> String:
 	return "●".repeat(n) + "○".repeat(5 - n)
 
 
+func _build_wardrobe() -> void:
+	var sc := _screen("Wardrobe", "Looks only. Earn coins by winning points, matches, career rounds and achievements.")
+	_wardrobe = sc[0]
+	_wardrobe_box = VBoxContainer.new()
+	_wardrobe_box.add_theme_constant_override("separation", 7)
+	sc[1].add_child(_wardrobe_box)
+	sc[1].add_child(_back_button(_wardrobe, "Done"))
+
+
+func show_wardrobe(on: bool) -> void:
+	if not on:
+		_wardrobe.visible = false
+		return
+	for c in _wardrobe_box.get_children():
+		c.queue_free()
+	var coins := _label("Coins: %d" % Profile.coins(), 16, LIME)
+	coins.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_wardrobe_box.add_child(coins)
+	var refresh := func() -> void:
+		Profile.save()
+		locker_changed.emit()
+		show_wardrobe(true)
+	# headwear
+	var hats := _row("Headwear")
+	for h in Roster.HATS:
+		var hid: String = h[0]
+		var price: int = h[2]
+		var owned := hid == "" or Profile.owns("hat_" + hid)
+		var on_now: bool = Profile.get_v("look", "hat", "") == hid
+		var b := _button(h[1] if owned else "%s · %d" % [h[1], price], 14, LIME if on_now else Color(1, 1, 1, 0.94 if owned else 0.3), INK)
+		b.custom_minimum_size = Vector2(120, 38)
+		b.pressed.connect(func() -> void:
+			if owned or Profile.buy("hat_" + hid, price):
+				Profile.set_v("look", "hat", hid)
+			refresh.call())
+		hats.add_child(b)
+	_wardrobe_box.add_child(hats)
+	_wardrobe_box.add_child(_palette_row("Headwear colour", "hat_col", 2, refresh))
+	# wristband
+	var band := _row("Wristband")
+	var has_band := Profile.owns("wristband")
+	var bb := _button("Owned: pick a colour" if has_band else "Buy · %d" % Roster.WRISTBAND_PRICE, 14, Color(1, 1, 1, 0.94 if has_band else 0.3), INK)
+	bb.custom_minimum_size = Vector2(240, 38)
+	bb.disabled = has_band
+	bb.pressed.connect(func() -> void:
+		if Profile.buy("wristband", Roster.WRISTBAND_PRICE):
+			Profile.set_v("look", "band_col", 0)
+		refresh.call())
+	band.add_child(bb)
+	_wardrobe_box.add_child(band)
+	if has_band:
+		_wardrobe_box.add_child(_palette_row("Wristband colour", "band_col", 1, refresh))
+	# paddle skins
+	var skins := _row("Paddle skin")
+	for sk in Roster.SKINS:
+		var sid: String = sk[0]
+		var price: int = sk[4]
+		var owned := sid == "" or Profile.owns("skin_" + sid)
+		var on_now: bool = Profile.get_v("look", "skin", "") == sid
+		var bg: Color = LIME if on_now else ((sk[3] as Color).darkened(0.35) if sid != "" else Color(1, 1, 1, 0.94))
+		if not owned:
+			bg.a = 0.35
+		var b := _button(sk[1] if owned else "%s · %d" % [sk[1], price], 13, bg, INK if on_now or sid == "" else Color.WHITE)
+		b.custom_minimum_size = Vector2(96, 38)
+		b.pressed.connect(func() -> void:
+			if owned or Profile.buy("skin_" + sid, price):
+				Profile.set_v("look", "skin", sid)
+			refresh.call())
+		skins.add_child(b)
+	_wardrobe_box.add_child(skins)
+	_open(_wardrobe)
+
+
+func _row(title: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 6)
+	var l := _label(title, 15, MUTED)
+	l.custom_minimum_size = Vector2(130, 0)
+	row.add_child(l)
+	return row
+
+
+func _palette_row(title: String, key: String, default: int, refresh: Callable) -> HBoxContainer:
+	var row := _row(title)
+	var cur := int(Profile.get_v("look", key, default))
+	for i in Roster.PALETTE.size():
+		var c: Color = Roster.PALETTE[i]
+		var b := _button("●" if i == cur else "", 14, c, INK if c.get_luminance() > 0.5 else Color.WHITE)
+		b.custom_minimum_size = Vector2(44, 34)
+		b.pressed.connect(func() -> void:
+			Profile.set_v("look", key, i)
+			refresh.call())
+		row.add_child(b)
+	return row
+
+
+func _build_awards() -> void:
+	var sc := _screen("Achievements", "Each one is worth %d coins" % Awards.COINS)
+	_awards = sc[0]
+	_awards_grid = GridContainer.new()
+	_awards_grid.columns = 3
+	_awards_grid.add_theme_constant_override("h_separation", 8)
+	_awards_grid.add_theme_constant_override("v_separation", 5)
+	sc[1].add_child(_awards_grid)
+	sc[1].add_child(_back_button(_awards))
+
+
+func show_awards(on: bool) -> void:
+	if not on:
+		_awards.visible = false
+		return
+	for c in _awards_grid.get_children():
+		c.queue_free()
+	for a in Awards.list():
+		var got := Awards.unlocked(a[0])
+		var b := _button("%s%s\n%s" % ["✓ " if got else "", a[1], a[2]], 12, LIME if got else Color(1, 1, 1, 0.14), INK if got else MUTED)
+		b.custom_minimum_size = Vector2(250, 40)
+		b.disabled = true
+		_awards_grid.add_child(b)
+	_open(_awards)
+
+
 func _build_stats() -> void:
 	var sc := _screen("Your stats")
 	_stats = sc[0]
+	var ab := _button("Achievements", 15, LIME, INK)
+	ab.custom_minimum_size = Vector2(200, 38)
+	ab.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	ab.pressed.connect(func() -> void:
+		_stats.visible = false
+		show_awards(true))
 	_stats_grid = GridContainer.new()
 	_stats_grid.columns = 4
 	_stats_grid.add_theme_constant_override("h_separation", 22)
 	_stats_grid.add_theme_constant_override("v_separation", 6)
 	sc[1].add_child(_stats_grid)
+	sc[1].add_child(ab)
 	sc[1].add_child(_back_button(_stats))
 
 
@@ -887,6 +1083,11 @@ func show_stats(on: bool) -> void:
 		["Víboras", str(Profile.stat("vibora"))], ["Chiquitas", str(Profile.stat("chiquita"))],
 		["Contraparedes", str(Profile.stat("contrapared"))], ["Online rating", "%d · %s" % [Profile.rating(), Roster.tier(Profile.rating())]],
 	]
+	var got := 0
+	for a in Awards.list():
+		got += 1 if Awards.unlocked(a[0]) else 0
+	rows.append(["Achievements", "%d of %d" % [got, Awards.list().size()]])
+	rows.append(["Coins", str(Profile.coins())])
 	for r in rows:
 		var k := _label(r[0], 15, MUTED)
 		var v := _label(r[1], 17, Color.WHITE)
@@ -974,9 +1175,28 @@ func _build_online() -> void:
 		var b := _button(h[1], 16, Color(1, 1, 1, 0.94), INK)
 		b.custom_minimum_size = Vector2(110, 44)
 		var id: String = h[0]
-		b.pressed.connect(func() -> void: online_create.emit(id, Profile.golden_point()))
+		b.pressed.connect(func() -> void: online_create.emit(id, Profile.golden_point(), 2))
 		host_row.add_child(b)
 	col.add_child(host_row)
+
+	# doubles: up to four phones, two per side; AI fills any empty places
+	var dbl_row := HBoxContainer.new()
+	dbl_row.add_theme_constant_override("separation", 8)
+	dbl_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	dbl_row.add_child(_label("Doubles, 4 phones:", 16, Color.WHITE))
+	for h in PRIVATE_LENGTHS:
+		var b := _button(h[1], 16, Color(1, 1, 1, 0.94), INK)
+		b.custom_minimum_size = Vector2(110, 44)
+		var id: String = h[0]
+		b.pressed.connect(func() -> void: online_create.emit(id, Profile.golden_point(), 4))
+		dbl_row.add_child(b)
+	col.add_child(dbl_row)
+	_start_btn = _button("Start now", 17, LIME, INK)
+	_start_btn.custom_minimum_size = Vector2(240, 46)
+	_start_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_start_btn.visible = false
+	_start_btn.pressed.connect(func() -> void: online_start_now.emit())
+	col.add_child(_start_btn)
 
 	var join_row := HBoxContainer.new()
 	join_row.add_theme_constant_override("separation", 8)
@@ -1052,6 +1272,7 @@ func _layout() -> void:
 
 	# left-handed: stick on the right, buttons on the left (mirror every x)
 	var k := Profile.button_scale()
+	joystick.visible = not Profile.one_handed()   # one-handed: the player moves itself
 	joystick.size = Vector2(w * 0.42, h * 0.6)
 	joystick.position = Vector2(w - joystick.size.x if lefty else 0.0, h * 0.4)
 	joystick.rest_centre = Vector2(joystick.size.x - 80 if lefty else 80.0, joystick.size.y - 80)
@@ -1083,3 +1304,6 @@ func _layout_message() -> void:
 	_callout.position = Vector2((w - _callout.size.x) * 0.5, h - _callout.size.y - 4)
 	_flash.reset_size()
 	_flash.position = Vector2((w - _flash.size.x) * 0.5, h * 0.2)
+	if _wind_label:
+		_wind_label.reset_size()
+		_wind_label.position = Vector2((w - _wind_label.size.x) * 0.5, _score_panel.size.y + 6)

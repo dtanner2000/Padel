@@ -38,6 +38,28 @@ Unlocked by career titles. Each also gets its own training drill.
 
 The AI also plays víboras and chiquitas. Online, everyone has every shot.
 
+### Venues, wind and court colours
+
+Each venue has its own surroundings: an indoor club hall (Club Night), a park (Regional Open), a beach at sunset (Nationals), and a packed arena with a panoramic all-glass court (World Tour Finals, where the crowd jumps on big points). The **City Rooftop** (yellow court, skyline) is open for quick play from the start. Outdoor courts have **wind**: a new gust each point, shown under the scoreboard ("Breezy · blowing left"). It is part of the ball physics, so the AI reads it too. There is no wind indoors, in training or online. Settings → **Court colour** overrides any venue's colour (blue, green, red, yellow, purple, pink).
+
+### Replays
+
+Big points get a slow-motion replay from a low side-on camera: a winning power smash, víbora, chiquita or contrapared, or (at most every fourth point) a 20-shot rally or a smash out of the court. Tap HIT to skip, or turn replays off in Settings. Offline only. Every frame of the rally is kept in a 2.6-second ring buffer (positions plus each player's rig pose) and blended back at 45 % speed.
+
+### Wardrobe, coins and achievements
+
+You earn **coins** for points won (2), matches (5, plus 15 for a win), career rounds (25, a title 100), first-time drills (20), daily goals (3 each) and achievements (50). The Wardrobe (Locker → Wardrobe) sells headwear (headband, visor, cap, in eight colours), a wristband, and paddle colourways. Looks only. Real-money purchases would need the App Store / Play billing plugins; the coin economy is ready for that.
+
+There are 21 **achievements** (Stats → Achievements). When a Game Center (iOS) or Play Games Services (Android) plugin is added to the export, unlocks are also reported there (`scripts/awards.gd`, `report()`). Create achievements with the same ids in App Store Connect / Play Console.
+
+### Accessibility
+
+Settings: **Ball trail** (a fading trail behind the ball), **Ball colour** (high-contrast magenta), **Ball size** (large), **One-handed** (no stick: your player moves itself like a partner would; you just hit), left-handed layout and button size.
+
+### Four-player doubles
+
+Online → **Doubles, 4 phones** makes a room code for up to four phones: the 2nd and 4th to join play against you, and the 3rd is your partner. The host can tap **Start now** with fewer, and the AI plays the empty places. If a phone drops out mid-match, the AI takes over its player. Doubles rooms are unranked. The relay protocol is now 3: each frame carries a slot byte (the target going out, the sender coming in).
+
 ### Ranked online
 
 Random quick matches are ranked (Elo, starting at 1000, K = 32; Bronze, Silver from 1050, Gold 1150, Platinum 1300, Diamond 1500). Private games with a code are unranked. The relay pairs players by rating, starting within 150 points and widening by 40 a second, so nobody waits long. After a match, both players tap HIT for a **rematch**, and each phone shows whether the other has asked. Ratings live on each phone; a server-side ladder would need accounts, which the game avoids. Game Center / Google Play Games leaderboards and friends need native plugins and are a later step.
@@ -78,7 +100,7 @@ curl https://<app-name>.fly.dev/health
 
 Then set `RELAY_URL := "wss://<app-name>.fly.dev"` in `scripts/online.gd`. Keep **one** machine: matches are held in memory. One small VM handles thousands of players. `/health` shows players online, people waiting and matches started.
 
-**Versioning:** `PROTOCOL` in `relay_peer.gd` and `relay.js` must match (now 2: ratings and rematch). When you change the netcode, bump both and deploy the server alongside the store release. Older apps get "Please update the game to play online."
+**Versioning:** `PROTOCOL` in `relay_peer.gd` and `relay.js` must match (now 3: ratings, rematch and 4-phone rooms). When you change the netcode, bump both and deploy the server alongside the store release. Older apps get "Please update the game to play online."
 
 ### Testing
 
@@ -165,6 +187,9 @@ godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot 
 --career=club|regional|national|world  --daily                             # career match / daily challenge
 --mash-kind=chiquita|vibora|contrapared                                   # the test bot plays that shot
 --games=N                                                                 # shorter quick matches (for tests)
+--court=ID                                                                # quick play on a venue (e.g. rooftop)
+--online-create=quick --room=4                                            # doubles room (join with --online-join=CODE)
+--screenshot=path.png@replay                                              # capture during the first replay
 --screen=career|team|locker|settings|stats|training                       # open a menu screen
 --relay=ws://127.0.0.1:8080 --online-quick                                # online test (run two copies)
 --drill=ground|aim|slice|glass|volley|smash|mix                           # start a training drill

@@ -59,7 +59,10 @@ const DRILL_INFO := {
 }
 const MIX_ORDER := ["ground", "glass", "slice", "volley", "smash", "aim"]
 const TRAINING_SAVE := "user://training.cfg"
-const FRIEND_INDEX := 2             # in versus your friend plays this rival slot
+## Online: which player each guest phone controls (peer id -> players[] index).
+## 1v1: the guest is a rival. Doubles: 2nd and 4th phones are rivals, the 3rd
+## is the host's partner.
+const SLOT_FOR_PEER := {2: 2, 3: 1, 4: 3}
 
 
 ## One controlling person's input. Stick and aim are in that person's screen
@@ -114,7 +117,7 @@ var intercepts := {}                  # Player -> prediction sample
 var last_callout := [null, null]
 
 var pad_local := Pad.new()
-var pad_remote := Pad.new()
+var pads := {}               # host: peer id -> Pad of that guest
 
 var mode := "menu"          # menu | quick | set | match | practice
 var attract := false        # AI-vs-AI running behind the start menu
@@ -144,14 +147,26 @@ var ch_params := {}
 var ch_size := Vector2(4.2, 2.4)
 var goal_frame: Node3D
 var sfx: Sfx
+var scenery: Scenery
+# replays: a ring buffer of every frame of the rally, played back slowly after big points
+const REC_SECONDS := 2.6
+const REPLAY_SPEED := 0.45
+var _rec: Array = []               # [ball pos, spin, [rig state x4]]
+var _replay: Array = []
+var _replay_t := -1.0              # < 0: not replaying
+var _replay_wait := 0.0
+var _replay_cam_side := 1.0
+var _since_replay := 99            # points since the last replay (long rallies wait their turn)
 var _last_move := Vector3.ZERO
 var _squeak_cd := 0.0
 var _over_at := 0.0               # when the match/challenge ended (taps ignored briefly)
 
 # versus
 var net_role := ""          # "" offline | "host" | "client"
-var remote_peer := 0
-var remote_player: Player = null
+var remotes := {}            # host: peer id -> the Player that guest controls
+var my_index := 0            # guests: which player this phone controls
+var room_size := 2           # 2 = 1v1 with AI partners, 4 = doubles room
+var lobby := false           # host of a doubles room, waiting for phones
 var _snap: Array = []
 var _snap_age := 0.0
 var _client_prev_vel := Vector3.ZERO
@@ -159,7 +174,7 @@ var _seen_swings := [0, 0, 0, 0]
 var opp_label := "OPPONENT"   # "FRIEND" in a private game
 var ranked := false            # random quick matches are rated; private games aren't
 var opp_rating := 1000
-var _rematch := [false, false] # host, guest taps for a rematch
+var _rematch := {}             # peer id (1 = host) -> tapped HIT for a rematch
 var rtt_ms := -1
 var _ping_timer := 0.0
 var debug_overlay: DebugOverlay
@@ -168,7 +183,10 @@ var debug_overlay: DebugOverlay
 var autoplay := false
 var trace := false
 var mash := false
-var test_games := 0       # --games=N: shorter matches for tests
+var test_games := 0
+var test_room := 2         # --room=4: --online-create makes a doubles room
+var test_court := ""      # --court=ID: quick play on that venue
+var shot_replay := false  # --screenshot=path@replay: capture during the first replay       # --games=N: shorter matches for tests
 var mash_kind := ""      # --mash-kind=chiquita|contrapared|vibora: the bot plays that shot
 var start_mode := ""
 var start_relay := ""
@@ -187,6 +205,8 @@ func _ready() -> void:
 	_setup_input()
 	court = Court.new()
 	add_child(court)
+	scenery = Scenery.new()
+	add_child(scenery)
 	_setup_environment()
 	ball = Ball.new()
 	add_child(ball)
@@ -216,6 +236,7 @@ func _ready() -> void:
 	hud.online_quick.connect(_online_quick)
 	hud.online_create.connect(_online_create)
 	hud.online_join.connect(_online_join)
+	hud.online_start_now.connect(_begin_online_match)
 	hud.online_closed.connect(func() -> void: online.close())
 	hud.training_chosen.connect(_start_training)
 	hud.career_chosen.connect(_start_career)
@@ -228,12 +249,15 @@ func _ready() -> void:
 		hud.set_team_names(_team_name(0, 0), _team_name(1, 0)))
 	hud.locker_changed.connect(func() -> void:
 		_apply_styles()
-		_apply_kit())
+		_apply_kit()
+		_check_awards())
 	hud.settings_changed.connect(func() -> void:
 		sfx.apply_settings()
+		ball.set_look(Profile.ball_large(), Profile.ball_contrast(), Profile.ball_trail())
 		if mode == "menu":
 			_apply_venue(Profile.get_v("settings", "court", "club")))
 	_make_goal_frame()
+	ball.set_look(Profile.ball_large(), Profile.ball_contrast(), Profile.ball_trail())
 	training.load(TRAINING_SAVE)
 	hud.set_training_info(_training_summary())
 	_make_target_marker()
@@ -268,7 +292,7 @@ func _ready() -> void:
 		if start_online == "quick":
 			_online_quick()
 		elif start_online.begins_with("create:"):
-			_online_create(start_online.get_slice(":", 1), true)
+			_online_create(start_online.get_slice(":", 1), true, test_room)
 		elif start_online.begins_with("join:"):
 			_online_join(start_online.get_slice(":", 1))
 	elif start_mode.begins_with("drill:"):
@@ -293,6 +317,8 @@ func _ready() -> void:
 					"settings": hud.show_settings(true)
 					"stats": hud.show_stats(true)
 					"locker": hud.show_locker(true)
+					"wardrobe": hud.show_wardrobe(true)
+					"awards": hud.show_awards(true)
 					"training": hud.show_training(true, _training_summary())
 
 
@@ -304,6 +330,10 @@ func _parse_args() -> void:
 			trace = true
 		elif a == "--mash":
 			mash = true
+		elif a.begins_with("--court="):
+			test_court = a.get_slice("=", 1)
+		elif a.begins_with("--room="):
+			test_room = a.get_slice("=", 1).to_int()
 		elif a.begins_with("--games="):
 			test_games = a.get_slice("=", 1).to_int()
 		elif a.begins_with("--mash-kind="):
@@ -328,7 +358,8 @@ func _parse_args() -> void:
 		elif a.begins_with("--screenshot="):
 			var v := a.get_slice("=", 1)
 			shot_path = v.get_slice("@", 0)
-			shot_at = v.get_slice("@", 1).to_float()
+			shot_replay = v.get_slice("@", 1) == "replay"
+			shot_at = 99999.0 if shot_replay else v.get_slice("@", 1).to_float()
 		elif a.begins_with("--quit-after="):
 			quit_after = a.get_slice("=", 1).to_float()
 
@@ -419,7 +450,7 @@ func _apply_lineup() -> void:
 ## about the court; the others act in _ai_hit, _do_hit and _timing_quality.
 func _apply_styles() -> void:
 	for p in players:
-		var base := 5.0 if p == players[0] or p == remote_player else 4.7
+		var base := 5.0 if p == players[0] or p in remotes.values() else 4.7
 		if net_role == "" and p.style == "Speed":
 			base *= 1.08
 		elif net_role == "" and p.style == "All-rounder":
@@ -437,8 +468,22 @@ func _apply_kit() -> void:
 		else:
 			pid = {"Power": "diamond", "Touch": "control", "Speed": "teardrop"}.get(p.style, "club")
 		var pd := Roster.paddle(pid)
-		p.set_paddle(pd.shape, pd.face, pd.trim if p.team == 0 or p == players[0] else Color("7b5cd6"))
+		var face: Color = pd.face
+		var trim: Color = pd.trim if p.team == 0 or p == players[0] else Color("7b5cd6")
+		if p == players[0]:
+			for sk in Roster.SKINS:
+				if sk[0] != "" and sk[0] == Profile.get_v("look", "skin", "") and Profile.owns("skin_" + sk[0]):
+					face = sk[2]
+					trim = sk[3]
+		p.set_paddle(pd.shape, face, trim)
 		p.reach = 1.15
+	var hat: String = Profile.get_v("look", "hat", "")
+	if hat != "" and not Profile.owns("hat_" + hat):
+		hat = ""
+	var band := Color(0, 0, 0, 0)
+	if Profile.owns("wristband"):
+		band = Roster.PALETTE[int(Profile.get_v("look", "band_col", 1))]
+	players[0].set_cosmetics(hat, Roster.PALETTE[int(Profile.get_v("look", "hat_col", 2))], band)
 	if _kit_on():
 		players[0].speed *= 1.0 + 0.016 * Profile.skill("speed")
 		players[0].reach = 1.15 + 0.03 * Profile.skill("reach")
@@ -516,7 +561,9 @@ func _style(p: Player) -> String:
 ## Court colours, sky and lights for a venue.
 func _apply_venue(id: String) -> void:
 	venue = Roster.venue(id)
-	court.apply_venue(venue)
+	var cc: String = Profile.court_colour()
+	court.apply_venue(venue, Roster.COURT_COLOURS[cc] if Roster.COURT_COLOURS.has(cc) else null)
+	scenery.build(venue.get("scene", "hall"))
 	_env.background_color = venue.bg
 	_env.ambient_light_color = venue.ambient
 	_env.ambient_light_energy = venue.ambient_e
@@ -621,7 +668,7 @@ func _human() -> Player:
 
 ## The player this device controls.
 func _me() -> Player:
-	return players[FRIEND_INDEX] if net_role == "client" else players[0]
+	return players[my_index] if net_role == "client" else players[0]
 
 
 func _my_team() -> int:
@@ -630,7 +677,7 @@ func _my_team() -> int:
 
 ## Is this player driven by a person (here or on the friend's phone)?
 func _controlled(p: Player) -> bool:
-	return (p == players[0] and not _ai_human()) or p == remote_player
+	return (p == players[0] and not _ai_human()) or p in remotes.values()
 
 
 func _team_has_person(t: int) -> bool:
@@ -641,17 +688,39 @@ func _team_has_person(t: int) -> bool:
 
 
 func _pad_for(p: Player) -> Pad:
-	return pad_remote if p == remote_player else pad_local
+	var id := _peer_of(p)
+	return pads[id] if id > 0 else pad_local
 
 
-func _team_name(team: int, viewer_team: int) -> String:
-	var mate0 := players[1].display_name
-	var mate1 := players[3].display_name
-	if net_role == "":
-		return "YOU · %s" % mate0 if team == 0 else "%s · %s" % [players[2].display_name, mate1]
-	if team == viewer_team:
-		return "YOU · %s" % (mate0 if team == 0 else mate1)
-	return "%s · %s" % [opp_label, mate0 if team == 0 else mate1]
+## The guest phone controlling this player (0 = none: this phone or the AI).
+func _peer_of(p: Player) -> int:
+	for id in remotes:
+		if remotes[id] == p:
+			return id
+	return 0
+
+
+## What the other phones call player i: P1..P4 in doubles, FRIEND/OPPONENT
+## for the host in 1v1, and AI players by their character name.
+func _label_of(i: int) -> String:
+	if net_role == "client" or not (i == 0 or players[i] in remotes.values()):
+		return players[i].display_name
+	if room_size == 2:
+		return opp_label
+	return "P%d" % (1 if i == 0 else _peer_of(players[i]))
+
+
+## Scoreboard name for a team, as seen by player `viewer` ("YOU · ANA").
+func _team_name(team: int, viewer: int) -> String:
+	var names: Array = []
+	for i in players.size():
+		if players[i].team != team:
+			continue
+		if i == viewer:
+			names.push_front("YOU")
+		else:
+			names.append(players[i].display_name if net_role == "" else _label_of(i))
+	return " · ".join(names)
 
 
 # --- modes ----------------------------------------------------------------------
@@ -692,7 +761,7 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 	attract = false
 	practice = id == "practice" or challenge
 	if career_venue == "" and not practice:
-		_apply_venue(Profile.get_v("settings", "court", "club"))
+		_apply_venue(test_court if test_court != "" else Profile.get_v("settings", "court", "club"))
 		_apply_ai_levels(0.74, [0.68, 0.7])
 	match id:
 		"quick": score = MatchScore.create(test_games if test_games > 0 else 4, 1, golden)
@@ -749,6 +818,7 @@ func _career_result(won: bool) -> String:
 	var rnd := career_round
 	if won:
 		Profile.add_stat("skill_points_earned", 1 if rnd < Roster.ROUNDS.size() - 1 else 3)
+		Profile.add_stat("coins", 25 if rnd < Roster.ROUNDS.size() - 1 else 100)
 	if won and rnd == Roster.ROUNDS.size() - 1:
 		var first := not Profile.career_won(career_venue)
 		var extras := ""
@@ -911,8 +981,10 @@ func _challenge_result(goal: bool, reason: String) -> void:
 		Profile.set_v("daily", today, best)
 		Profile.max_stat("daily_best", ch_goals)
 		Profile.add_stat("daily_played")
+		Profile.add_stat("coins", ch_goals * 3)
 		Profile.save()
 		ch_best = best
+		_check_awards()
 		state = State.MATCH_OVER
 		state_timer = 4.5
 		_over_at = elapsed
@@ -979,9 +1051,9 @@ func _online_quick() -> void:
 	online.quick("quick")
 
 
-func _online_create(length: String, golden: bool) -> void:
+func _online_create(length: String, golden: bool, size := 2) -> void:
 	opp_label = "FRIEND"
-	online.create(length, golden)
+	online.create(length, golden, size)
 
 
 func _online_join(code: String) -> void:
@@ -995,58 +1067,103 @@ func _on_room_code(code: String) -> void:
 		print("[net] room code ", code)
 
 
-## Both phones: the relay paired us. The host sets up the match; the
-## guest waits for net_start.
-func _on_online_matched(is_host: bool, length: String, golden: bool) -> void:
+## The relay paired us. The host sets up the match; guests wait for net_start.
+func _on_online_matched(is_host: bool, length: String, golden: bool, size: int) -> void:
+	room_size = size
 	hud.set_online_status("Opponent found!" if opp_label == "OPPONENT" else "Your friend is here!")
 	if is_host:
 		mode = length
 		score = MatchScore.create(test_games if test_games > 0 else (4 if length == "quick" else 6), 2 if length == "match" else 1, golden)
+		lobby = size > 2
 	if quit_after > 0.0:
-		print("[net] matched, host=", is_host)
+		print("[net] matched, host=", is_host, " size=", size)
 
 
-## Host: the other phone arrived. Start the match on both.
+## Host: a phone arrived. 1v1 starts at once; a doubles room waits for four
+## phones, or for the host to tap Start now (AI plays any empty places).
 func _on_peer_connected(id: int) -> void:
-	if not multiplayer.is_server() or net_role != "":
+	if not multiplayer.is_server() or net_role != "" or remotes.has(id):
 		return
-	net_role = "host"
-	remote_peer = id
-	remote_player = players[FRIEND_INDEX]
-	remote_player.display_name = opp_label
-	remote_player.set_tag(opp_label)
-	remote_player.accel = 48.0
-	_apply_styles()
-	pad_remote = Pad.new()
-	pad_remote.mirror = -1.0
-	hud.net_mode = true
-	var golden := score.golden_point
-	ranked = opp_label == "OPPONENT"
-	_rematch = [false, false]
-	_on_mode_chosen(mode, golden)
-	net_start.rpc_id(id, mode, golden, Profile.rating(), ranked)
-	_send_score()
-	hud.show_message("%s joined. You serve first%s" % [opp_label.capitalize(), "\nRanked match" if ranked else ""], 1.8)
+	var slot: int = SLOT_FOR_PEER.get(id, -1)
+	if slot < 0:
+		return
+	var p := players[slot]
+	remotes[id] = p
+	p.accel = 48.0
+	var pad := Pad.new()
+	pad.mirror = -1.0 if p.team == 1 else 1.0
+	pads[id] = pad
 	if quit_after > 0.0:
-		print("[net] opponent connected: ", id)
+		print("[net] phone joined: ", id)
+	if room_size <= 2 or remotes.size() >= room_size - 1:
+		_begin_online_match()
+	else:
+		hud.set_online_status("%d of 4 phones here. Waiting for more, or start now: AI plays the empty places." % (remotes.size() + 1))
+		hud.show_start_now(true)
 
 
-func _on_peer_disconnected(_id: int) -> void:
-	if net_role == "host":
-		_end_versus("Your %s left the match" % opp_label.to_lower())
+func _begin_online_match() -> void:
+	if remotes.is_empty() or net_role != "":
+		return
+	online.start_room()
+	lobby = false
+	hud.show_start_now(false)
+	net_role = "host"
+	hud.net_mode = true
+	for id in remotes:
+		remotes[id].set_display_name(_label_of(SLOT_FOR_PEER[id]))
+	var golden := score.golden_point
+	ranked = opp_label == "OPPONENT" and room_size == 2
+	_rematch = {}
+	_apply_styles()
+	_on_mode_chosen(mode, golden)
+	var names: Array = []
+	for i in players.size():
+		names.append(_label_of(i))
+	for id in remotes:
+		net_start.rpc_id(id, mode, golden, Profile.rating(), ranked, SLOT_FOR_PEER[id], names)
+	_send_score()
+	var who := "%s joined" % opp_label.capitalize() if room_size == 2 else "%d phones" % (remotes.size() + 1)
+	hud.show_message("%s. You serve first%s" % [who, "\nRanked match" if ranked else ""], 1.8)
+	if quit_after > 0.0:
+		print("[net] match started with %d phones" % (remotes.size() + 1))
+
+
+func _on_peer_disconnected(id: int) -> void:
+	if lobby and remotes.has(id):
+		remotes.erase(id)
+		pads.erase(id)
+		hud.set_online_status("%d of 4 phones here." % (remotes.size() + 1))
+		hud.show_start_now(not remotes.is_empty())
+	elif net_role == "host" and room_size > 2 and remotes.size() > 1 and remotes.has(id):
+		# doubles: the AI takes over a phone that drops out, and play goes on
+		var p: Player = remotes[id]
+		remotes.erase(id)
+		pads.erase(id)
+		p.accel = 20.0
+		_apply_styles()
+		_message("P%d left: the AI takes over" % id, "P%d left: the AI takes over" % id, 2.0)
+	elif net_role == "host":
+		var who := "Your %s" % opp_label.to_lower() if room_size == 2 else "P%d" % id
+		_end_versus("%s left the match" % who)
 
 
 func _end_versus(msg: String) -> void:
-	if net_role == "" and msg != "" and not online.is_active():
+	if net_role == "" and not lobby and msg != "" and not online.is_active():
 		return
 	online.close()
 	net_role = ""
-	remote_peer = 0
-	remote_player = null
+	lobby = false
+	remotes.clear()
+	pads.clear()
+	my_index = 0
+	room_size = 2
+	hud.show_start_now(false)
 	_apply_lineup()
 	players[0].set_tag("")
 	hud.net_mode = false
 	_snap = []
+	court.set_viewer_end(0)
 	_go_menu()
 	if msg != "":
 		hud.show_message(msg, 3.0)
@@ -1057,39 +1174,46 @@ func _end_versus(msg: String) -> void:
 # --- versus: host → client ------------------------------------------------------
 
 @rpc("authority", "call_remote", "reliable")
-func net_start(mode_id: String, golden: bool, host_rating := 1000, is_ranked := false) -> void:
+func net_start(mode_id: String, golden: bool, host_rating := 1000, is_ranked := false, slot := 2, names := []) -> void:
 	net_role = "client"
+	my_index = slot
+	if quit_after > 0.0:
+		print("[net] started as player %d" % slot)
 	opp_rating = host_rating
 	ranked = is_ranked
-	_rematch = [false, false]
+	_rematch = {}
 	net_hello_rating.rpc_id(1, Profile.rating())
 	mode = mode_id
 	attract = false
 	practice = false
 	score = MatchScore.create(4 if mode_id == "quick" else 6, 2 if mode_id == "match" else 1, golden)
-	for p in players:
+	for i in players.size():
+		var p := players[i]
 		p.visible = true
+		if i < names.size():
+			p.set_display_name(str(names[i]))
+		p.is_human = i == slot
+		p.set_tag("" if i == slot else p.display_name)
+	players[slot].display_name = "YOU"
 	machine.visible = false
-	players[FRIEND_INDEX].display_name = "YOU"
-	players[FRIEND_INDEX].set_tag("")
-	players[0].set_tag(opp_label)
 	ball.live = false
 	ring.visible = false
 	hud.net_mode = true
 	hud.show_menu(false)
 	hud.set_practice(false)
-	hud.set_team_names(_team_name(0, 1), _team_name(1, 1))
-	hud.show_message("Connected! You're at the far end", 2.0)
+	hud.set_team_names(_team_name(0, slot), _team_name(1, slot))
+	var far := players[slot].team == 1
+	hud.show_message("Connected! You're at the %s end" % ("far" if far else "near"), 2.0)
 	for i in 4:
 		_seen_swings[i] = players[i].swing_count
-	camera.position = Vector3(0, cam_base.y, -cam_base.z)
-	court.set_viewer_end(1)
+	camera.position = Vector3(0, cam_base.y, -cam_base.z if far else cam_base.z)
+	court.set_viewer_end(1 if far else 0)
 
 
 ## Guest -> host: my rating, for the ranked result.
 @rpc("any_peer", "call_remote", "reliable")
 func net_hello_rating(r: int) -> void:
-	if multiplayer.get_remote_sender_id() == remote_peer:
+	if remotes.has(multiplayer.get_remote_sender_id()):
 		opp_rating = clampi(r, 0, 4000)
 
 
@@ -1105,29 +1229,44 @@ func net_match_result(won: bool, new_rating: int, delta: int) -> void:
 	if ranked:
 		Profile.set_v("online", "rating", new_rating)
 	Profile.save()
+	_check_awards()
 
 
 ## Guest -> host: tapped HIT after the match for a rematch.
 @rpc("any_peer", "call_remote", "reliable")
 func net_rematch_vote() -> void:
-	if multiplayer.get_remote_sender_id() == remote_peer and state == State.MATCH_OVER:
-		_rematch[1] = true
+	if remotes.has(multiplayer.get_remote_sender_id()) and state == State.MATCH_OVER:
+		_rematch[multiplayer.get_remote_sender_id()] = true
 		_check_rematch()
 
 
-## Both phones tapped HIT: play again. Otherwise tell each what's happening.
+## Every phone tapped HIT: play again. Otherwise say who we're waiting for.
 func _check_rematch() -> void:
-	if _rematch[0] and _rematch[1]:
-		_rematch = [false, false]
+	var waiting := 0
+	if not _rematch.has(1):
+		waiting += 1
+	for id in remotes:
+		if not _rematch.has(id):
+			waiting += 1
+	if waiting == 0:
+		_rematch = {}
 		_on_mode_chosen(mode, score.golden_point)
-		net_start.rpc_id(remote_peer, mode, score.golden_point, Profile.rating(), ranked)
+		var names: Array = []
+		for i in players.size():
+			names.append(_label_of(i))
+		for id in remotes:
+			net_start.rpc_id(id, mode, score.golden_point, Profile.rating(), ranked, SLOT_FOR_PEER[id], names)
 		_send_score()
 		_message("Rematch!", "Rematch!", 1.5)
+		return
+	var asks := "Rematch? Tap HIT to play again"
+	var waits := "Waiting for %d more to tap HIT…" % waiting
+	if _rematch.has(1):
+		hud.show_message(waits, 30.0)
 	else:
-		var who := "Your friend" if opp_label == "FRIEND" else "Your opponent"
-		var asks := "%s wants a rematch: tap HIT" % who
-		var waits := "Rematch? Waiting for the other player…"
-		_message(waits if _rematch[0] else asks, asks if _rematch[0] else waits, 30.0)
+		hud.show_message(asks, 30.0)
+	for id in remotes:
+		net_message.rpc_id(id, waits if _rematch.has(id) else asks, 30.0)
 
 
 ## Elo: [new rating, change] for a player rated `mine` against `theirs`.
@@ -1208,26 +1347,37 @@ func net_debug_text() -> String:
 func _send_score() -> void:
 	var serving := players[_server_index()].team
 	hud.update_score(score, serving)
-	if net_role == "host":
-		net_score.rpc_id(remote_peer, {
+	for id in (remotes.keys() if net_role == "host" else []):
+		net_score.rpc_id(id, {
 			"points": score.points, "games": score.games, "sets": score.sets,
 			"tiebreak": score.tiebreak, "games_per_set": score.games_per_set,
 			"sets_to_win": score.sets_to_win, "golden": score.golden_point,
 			"winner": score.winner, "serving": serving})
 
 
-## Show a message here and, in versus, its counterpart on the friend's phone.
+## Show a message here and, in versus, its counterpart on the other phones
+## (text_friend: the far end's version in 1v1; doubles guests get their own).
 func _message(text_here: String, text_friend: String, secs: float) -> void:
 	if text_here != "":
 		hud.show_message(text_here, secs)
 	if net_role == "host" and text_friend != "":
-		net_message.rpc_id(remote_peer, text_friend, secs)
+		for id in remotes:
+			net_message.rpc_id(id, text_friend, secs)
+
+
+## A message worded for each viewer: f(player index) -> text.
+func _announce(f: Callable, secs: float) -> void:
+	hud.show_message(f.call(0), secs)
+	if net_role == "host":
+		for id in remotes:
+			net_message.rpc_id(id, f.call(SLOT_FOR_PEER[id]), secs)
 
 
 func _set_rally(n: int) -> void:
 	hud.set_rally(n)
 	if net_role == "host":
-		net_rally.rpc_id(remote_peer, "RALLY  %d" % n)
+		for id in remotes:
+			net_rally.rpc_id(id, "RALLY  %d" % n)
 
 
 func _send_snapshot() -> void:
@@ -1240,44 +1390,49 @@ func _send_snapshot() -> void:
 		vel.append(p.vel)
 		swings.append(p.swing_count)
 		kinds.append(p.last_swing)
-	var rp := Vector3.ZERO
-	var rv := false
-	if remote_player and assigned[remote_player.team] == remote_player and intercepts.has(remote_player) and state == State.RALLY:
-		rv = true
-		rp = intercepts[remote_player].pos
-	var ready := _readiness(remote_player)
-	net_snapshot.rpc_id(remote_peer, [
-		state, last_hitter_team, ball.sim.pos, ball.sim.vel if ball.live else Vector3.ZERO,
-		pos, vel, swings, rv, rp, ready[0], ready[1], kinds, ball.sim.spin])
+	for id in remotes:
+		var rp_player: Player = remotes[id]
+		var rp := Vector3.ZERO
+		var rv := false
+		if assigned[rp_player.team] == rp_player and intercepts.has(rp_player) and state == State.RALLY:
+			rv = true
+			rp = intercepts[rp_player].pos
+		var ready := _readiness(rp_player)
+		net_snapshot.rpc_id(id, [
+			state, last_hitter_team, ball.sim.pos, ball.sim.vel if ball.live else Vector3.ZERO,
+			pos, vel, swings, rv, rp, ready[0], ready[1], kinds, ball.sim.spin])
 
 
 # --- versus: client → host ------------------------------------------------------
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func net_input(move: Vector2, held: bool, aim: Vector2) -> void:
-	if multiplayer.get_remote_sender_id() != remote_peer:
+	var id := multiplayer.get_remote_sender_id()
+	if not pads.has(id):
 		return
-	pad_remote.move = move
-	pad_remote.held = held
-	pad_remote.live_aim = aim
+	pads[id].move = move
+	pads[id].held = held
+	pads[id].live_aim = aim
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func net_shot(kind: String, aim: Vector2) -> void:
-	if multiplayer.get_remote_sender_id() == remote_peer and remote_player:
-		_pad_shot(pad_remote, kind, aim)
+	var id := multiplayer.get_remote_sender_id()
+	if pads.has(id):
+		_pad_shot(pads[id], kind, aim)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func net_hit_pressed() -> void:
-	if multiplayer.get_remote_sender_id() == remote_peer and remote_player:
-		_pad_pressed(pad_remote, remote_player)
+	var id := multiplayer.get_remote_sender_id()
+	if pads.has(id):
+		_pad_pressed(pads[id], remotes[id])
 
 
 # --- client loop ----------------------------------------------------------------
 
 func _client_tick(delta: float) -> void:
-	pad_local.mirror = -1.0
+	pad_local.mirror = -1.0 if _my_team() == 1 else 1.0
 	pad_local.move = hud.joystick.value + Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	pad_local.held = _hit_held()
 	pad_local.live_aim = _held_aim()
@@ -1339,6 +1494,9 @@ func _client_tick(delta: float) -> void:
 # --- point flow -----------------------------------------------------------------
 
 func _start_point() -> void:
+	_end_replay()
+	_rec.clear()
+	_roll_wind()
 	state = State.SERVE_WAIT
 	serve_in_play = false
 	receiver_bounces = 0
@@ -1352,7 +1510,8 @@ func _start_point() -> void:
 	ring.visible = false
 	aim_marker.visible = false
 	pad_local.buffer = 0.0
-	pad_remote.buffer = 0.0
+	for pd in pads.values():
+		pd.buffer = 0.0
 	_set_rally(0)
 
 	if practice:
@@ -1404,9 +1563,118 @@ func _start_point() -> void:
 	state_timer = 0.9
 	if srv == players[0] and not _ai_human():
 		hud.show_message("Your serve — tap HIT", 2.0)
-	elif srv == remote_player:
-		net_message.rpc_id(remote_peer, "Your serve — tap HIT", 2.0)
+	elif _peer_of(srv) > 0:
+		net_message.rpc_id(_peer_of(srv), "Your serve — tap HIT", 2.0)
 	_send_score()
+
+
+## Newly earned achievements: pay out and announce them.
+func _check_awards() -> void:
+	if _ai_human():
+		return
+	var done := 0
+	for id in DRILL_INFO:
+		if bool(training.get_value(id, "done", false)):
+			done += 1
+	var total := 0
+	for id in DRILL_INFO:
+		if DRILL_INFO[id].goal > 0:
+			total += 1
+	var fresh := Awards.check({"drills": done, "drills_total": total})
+	if not fresh.is_empty():
+		hud.flash("ACHIEVEMENT: %s%s  +%d coins" % [fresh[0], "  (+%d more)" % (fresh.size() - 1) if fresh.size() > 1 else "", Awards.COINS * fresh.size()], 2.5)
+		sfx.ui("ding", -6.0)
+
+
+## A fresh gust for each point on outdoor courts (none indoors, in training or online).
+func _roll_wind() -> void:
+	var strength: float = venue.get("wind", 0.0)
+	if practice or net_role != "" or strength <= 0.0 or mode == "menu":
+		BallSim.wind = Vector3.ZERO
+		hud.set_wind("")
+		return
+	var a := randf() * TAU
+	var mag := strength * randf_range(0.35, 1.0)
+	BallSim.wind = Vector3(cos(a), 0, sin(a) * 0.6) * mag
+	var w := BallSim.wind
+	var dir := ""
+	if absf(w.x) >= absf(w.z):
+		dir = "blowing left" if w.x < 0.0 else "blowing right"
+	else:
+		dir = "blowing towards you" if w.z > 0.0 else "blowing away from you"
+	var word := "Light wind" if mag < 0.6 else ("Breezy" if mag < 1.0 else "Strong wind")
+	hud.set_wind("%s · %s" % [word, dir])
+
+
+## Record this frame of the rally for a possible replay.
+func _record_frame() -> void:
+	var rigs: Array = []
+	for p in players:
+		rigs.append(p.rig_state())
+	_rec.append([ball.position, ball.shown_spin, rigs])
+	if _rec.size() > int(REC_SECONDS * Engine.physics_ticks_per_second):
+		_rec.pop_front()
+
+
+## Big points get a slow-motion replay: a winning special shot, a long rally,
+## or a smash out of the court. Offline only.
+func _maybe_replay(team: int, reason: String) -> void:
+	if not Profile.replays() or net_role != "" or _ai_human() or practice or _rec.size() < 30:
+		return
+	_since_replay += 1
+	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita"] and team == last_hitter_team
+	var epic := (rally_hits >= 20 or reason == "Out of the court!") and _since_replay >= 4
+	if special or epic:
+		_since_replay = 0
+		_replay = _rec.duplicate()
+		_replay_wait = 1.2
+		_replay_cam_side = 1.0 if randf() < 0.5 else -1.0
+		state_timer = maxf(state_timer, _replay_wait + _replay.size() / (Engine.physics_ticks_per_second * REPLAY_SPEED) + 0.6)
+
+
+func _tick_replay(delta: float) -> void:
+	if _replay.is_empty():
+		return
+	if _replay_t < 0.0:
+		_replay_wait -= delta
+		if _replay_wait > 0.0:
+			return
+		_replay_t = 0.0
+		for p in players:
+			p.replaying = true
+		hud.set_banner("REPLAY  ·  tap HIT to skip")
+		if quit_after > 0.0:
+			print("[replay] %d frames, %s" % [_replay.size(), last_shot_kind])
+	_replay_t += delta * REPLAY_SPEED * Engine.physics_ticks_per_second
+	var i := int(_replay_t)
+	if i >= _replay.size() - 1:
+		_end_replay()
+		state_timer = minf(state_timer, 0.5)
+		return
+	var a: Array = _replay[i]
+	var b: Array = _replay[i + 1]
+	var k := _replay_t - i
+	ball.position = (a[0] as Vector3).lerp(b[0], k)
+	ball.shown_spin = a[1]
+	for j in players.size():
+		var ra: Array = a[2][j]
+		var rb: Array = b[2][j]
+		var mix := ra.duplicate()
+		mix[0] = (ra[0] as Vector3).lerp(rb[0], k)
+		mix[8] = (ra[8] as Quaternion).slerp(rb[8], k)
+		for f in [1, 2, 3, 4, 5, 6, 7, 9]:
+			mix[f] = lerpf(ra[f], rb[f], k)
+		players[j].apply_rig_state(mix)
+
+
+func _end_replay() -> void:
+	if _replay.is_empty() and _replay_t < 0.0:
+		return
+	_replay = []
+	_replay_t = -1.0
+	for p in players:
+		p.replaying = false
+	hud.set_banner("")
 
 
 ## Players and ball were just moved to new spots: tell physics interpolation
@@ -1494,7 +1762,10 @@ func _practice_result(good: bool, reason: String) -> void:
 			var first := not bool(training.get_value(drill_id, "done", false))
 			if first:
 				Profile.add_stat("skill_points_earned")
+				Profile.add_stat("coins", 20)
 				Profile.save()
+				training.set_value(drill_id, "done", true)
+				_check_awards()
 			hud.show_message("✓ Drill complete!\n%s%s" % [DRILL_INFO[drill_id].name, "\n+1 skill point" if first else ""], 2.2)
 			training.set_value(drill_id, "done", true)
 			state_timer = 2.2
@@ -1540,8 +1811,10 @@ func _practice_judge(pos: Vector3, landed: bool) -> void:
 	_practice_result(ok, why)
 
 
+## The point/game/match message as player `viewer` should read it.
 func _point_text(team: int, reason: String, res: String, viewer: int) -> String:
 	var who := _team_name(team, viewer)
+	var viewer_team := players[viewer].team
 	match res:
 		"game":
 			return "%s\nGame %s" % [reason, who]
@@ -1549,7 +1822,7 @@ func _point_text(team: int, reason: String, res: String, viewer: int) -> String:
 			return "%s\nSet %s" % [reason, who]
 		"match":
 			var tail := "\nTap HIT for a rematch" if net_role != "" else "\nTap HIT to play again"
-			return ("You win the match!" if team == viewer else "%s take the match" % who) + tail
+			return ("You win the match!" if team == viewer_team else "%s take the match" % who) + tail
 	return "%s\nPoint %s" % [reason, who]
 
 
@@ -1580,12 +1853,15 @@ func _award(team: int, reason: String) -> void:
 	var res := score.point_won(team)
 	var big := rally_hits >= 8 or reason == "Out of the court!" or res in ["set", "match"]
 	sfx.crowd(big)
+	scenery.cheer(1.0 if big else 0.4)
+	_maybe_replay(team, reason)
 	var mine := _my_team()
 	var counted := not _ai_human()
 	if counted:
 		Profile.add_stat("points_played")
 		if team == mine:
 			Profile.add_stat("points_won")
+			Profile.add_stat("coins", 2)
 		Profile.max_stat("longest_rally", rally_hits)
 	var here := _point_text(team, reason, res, 0)
 	if res == "match":
@@ -1594,8 +1870,10 @@ func _award(team: int, reason: String) -> void:
 		_over_at = elapsed
 		if counted:
 			Profile.add_stat("matches")
+			Profile.add_stat("coins", 5)
 			if team == mine:
 				Profile.add_stat("wins")
+				Profile.add_stat("coins", 15)
 			if net_role != "":
 				Profile.add_stat("online_matches")
 				if team == mine:
@@ -1604,7 +1882,6 @@ func _award(team: int, reason: String) -> void:
 			here = _career_result(team == 0) + "\nTap HIT to continue"
 			state_timer = 6.0
 		if net_role == "host":
-			var friend_text := _point_text(team, reason, res, 1)
 			var h: Array = [Profile.rating(), 0]
 			var g: Array = [opp_rating, 0]
 			if ranked:
@@ -1612,16 +1889,25 @@ func _award(team: int, reason: String) -> void:
 				g = _elo(opp_rating, Profile.rating(), team == 1)
 				Profile.set_v("online", "rating", h[0])
 				here += "\nRating %d (%+d) · %s" % [h[0], h[1], Roster.tier(h[0])]
-				friend_text += "\nRating %d (%+d) · %s" % [g[0], g[1], Roster.tier(g[0])]
-			net_match_result.rpc_id(remote_peer, team == 1, g[0], g[1])
-			_message(here, friend_text, 30.0)
+			hud.show_message(here, 30.0)
+			for id in remotes:
+				var their: Player = remotes[id]
+				var text := _point_text(team, reason, res, SLOT_FOR_PEER[id])
+				if ranked:
+					text += "\nRating %d (%+d) · %s" % [g[0], g[1], Roster.tier(g[0])]
+				net_match_result.rpc_id(id, team == their.team, g[0], g[1])
+				net_message.rpc_id(id, text, 30.0)
 			if counted:
 				Profile.save()
 			return
 	if counted:
 		Profile.save()
+		_check_awards()
 	var secs := 1.7 if res != "match" else (6.0 if career_venue != "" else 4.0)
-	_message(here, _point_text(team, reason, res, 1), secs)
+	if net_role == "host":
+		_announce(func(v: int) -> String: return here if v == 0 else _point_text(team, reason, res, v), secs)
+	else:
+		hud.show_message(here, secs)
 	_send_score()
 	if quit_after > 0.0:
 		print("[point] %-26s -> team %d (%s)  hits=%d  sets %s games %s pts %s/%s" % [
@@ -1730,7 +2016,14 @@ func _process(delta: float) -> void:
 		_ping_timer -= delta
 		if _ping_timer <= 0.0:
 			_ping_timer = 1.0
-			net_ping.rpc_id(remote_peer if net_role == "host" else 1, Time.get_ticks_msec())
+			net_ping.rpc_id(remotes.keys()[0] if net_role == "host" and not remotes.is_empty() else 1, Time.get_ticks_msec())
+	if _replay_t >= 0.0:
+		# replay camera: low, beside the court, tracking the ball
+		var bp := ball.position
+		var want := Vector3(_replay_cam_side * 6.5, 2.6, clampf(bp.z * 0.6 + 4.0, -6.0, 9.0))
+		camera.position = camera.position.lerp(want, 1.0 - exp(-2.5 * delta))
+		camera.look_at(bp.lerp(Vector3(0, 1.0, bp.z), 0.4))
+		return
 	var me := _me()
 	var sgn := Court.team_sign(me.team)
 	var bx := ball.position.x if (ball.live or net_role == "client") else 0.0
@@ -1749,6 +2042,11 @@ func _physics_process(delta: float) -> void:
 		get_tree().quit()
 		set_physics_process(false)
 		return
+	if shot_replay and _replay_t > 26.0:
+		shot_replay = false
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(shot_path)
+		print("saved ", shot_path)
 	if shot_at > 0.0 and elapsed >= shot_at and (state == State.RALLY or net_role == "client"):
 		shot_at = -1.0
 		await RenderingServer.frame_post_draw
@@ -1771,7 +2069,8 @@ func _physics_process(delta: float) -> void:
 		_client_tick(delta)
 		return
 	pad_local.buffer = maxf(0.0, pad_local.buffer - delta)
-	pad_remote.buffer = maxf(0.0, pad_remote.buffer - delta)
+	for pd in pads.values():
+		pd.buffer = maxf(0.0, pd.buffer - delta)
 	pad_local.mirror = 1.0
 	pad_local.touch = hud.hit_btn.is_held()
 	pad_local.move = hud.joystick.value + Input.get_vector("move_left", "move_right", "move_up", "move_down")
@@ -1782,9 +2081,12 @@ func _physics_process(delta: float) -> void:
 			_tick_serve(delta)
 		State.RALLY:
 			_tick_rally(delta)
+			_record_frame()
 		State.POINT_OVER:
+			_tick_replay(delta)
 			for p in players:
-				p.move_dir(Vector3.ZERO, delta)
+				if not p.replaying:
+					p.move_dir(Vector3.ZERO, delta)
 			state_timer -= delta
 			if state_timer <= 0.0:
 				_start_point()
@@ -1891,10 +2193,16 @@ func _refresh_prediction() -> void:
 	assigned[last_hitter_team] = null
 	if pick != last_callout[next_team]:
 		last_callout[next_team] = pick
-		if next_team == 0 and not _ai_human():
-			hud.callout("%s: %s" % [players[1].display_name, "MINE!" if pick != _human() else "YOURS!"])
-		elif remote_player and next_team == remote_player.team:
-			net_callout.rpc_id(remote_peer, "%s: %s" % [players[3].display_name, "MINE!" if pick != remote_player else "YOURS!"])
+		# an AI partner calls the ball for its person (people partnering each other talk)
+		for i in players.size():
+			var me_p := players[i]
+			if me_p.team != next_team or not _controlled(me_p) or _controlled(_partner(me_p)):
+				continue
+			var call := "%s: %s" % [_partner(me_p).display_name, "MINE!" if pick != me_p else "YOURS!"]
+			if i == 0 and not _ai_human():
+				hud.callout(call)
+			elif _peer_of(me_p) > 0:
+				net_callout.rpc_id(_peer_of(me_p), call)
 
 
 func _first_x_on(team: int) -> float:
@@ -2089,6 +2397,10 @@ func _on_hit_pressed() -> void:
 
 
 func _on_shot_requested(kind: String, aim: Vector2) -> void:
+	if _replay_t >= 0.0:
+		_end_replay()
+		state_timer = minf(state_timer, 0.4)
+		return
 	if net_role == "client":
 		if not _snap.is_empty() and _snap[0] == State.MATCH_OVER:
 			net_rematch_vote.rpc_id(1)
@@ -2104,7 +2416,7 @@ func _on_shot_requested(kind: String, aim: Vector2) -> void:
 		_career_continue()
 		return
 	if state == State.MATCH_OVER and net_role == "host":
-		_rematch[0] = true
+		_rematch[1] = true
 		_check_rematch()
 		return
 	if state == State.MATCH_OVER and not _ai_human():
@@ -2137,6 +2449,12 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		sfx.at("squeak", p.position, -10.0)
 	if pad.move.length() > 0.1:
 		p.move_dir(pad.world_move(), delta)
+	elif Profile.one_handed() and p == players[0] and net_role != "client":
+		# one-handed play: your player moves itself, like an AI, and you just hit
+		if assigned[p.team] == p and intercepts.has(p):
+			p.move_towards(_intercept_stand(p, intercepts[p].pos), delta)
+		else:
+			p.move_towards(_home_for(p, 1 - last_hitter_team), delta)
 	elif MOVE_ASSIST > 0.0 and assigned[p.team] == p and intercepts.has(p) and not (practice and not DRILL_INFO[_drill()].get("assist", true)):
 		p.move_towards(_intercept_stand(p, intercepts[p].pos), delta, MOVE_ASSIST)
 	else:
@@ -2207,8 +2525,8 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 			if q > 0.85:
 				Profile.add_stat("perfect")
 		var ms := 60 if q > 0.85 else 25
-		if p == remote_player:
-			net_feedback.rpc_id(remote_peer, fx, ms)
+		if _peer_of(p) > 0:
+			net_feedback.rpc_id(_peer_of(p), fx, ms)
 		else:
 			if fx != "":
 				hud.flash(fx)

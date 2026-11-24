@@ -1,7 +1,7 @@
 // Padel online relay.
 //
-// Pairs two phones (random quick match, or a private 4-letter room code) and
-// then forwards their game packets to each other. The host phone runs the
+// Pairs phones (random 1v1 quick match, or a private 4-letter room for 2 to 4
+// phones) and then forwards their game packets between them. The host phone runs the
 // match; this server never looks inside a game packet, so it stays tiny,
 // cheap and generic.
 //
@@ -9,12 +9,15 @@
 //   text frames  = JSON control messages
 //     client -> server  {t:"hello", v}              protocol version check
 //                       {t:"quick", length, rating}  join the random queue (paired by rating)
-//                       {t:"create", length, golden} make a private room
+//                       {t:"create", length, golden, size} make a private room (size 2 or 4 phones)
 //                       {t:"join", code}             join a private room
+//                       {t:"start"}                  host: close the room and play with who's there
 //                       {t:"cancel"}                 leave queue/room
-//     server -> client  {t:"queued"} {t:"room", code} {t:"matched", host, length, golden}
-//                       {t:"left"} {t:"error", code, msg}
-//   binary frames = game packets, forwarded verbatim to the other player
+//     server -> client  {t:"queued"} {t:"room", code} {t:"matched", host, id, length, golden, size}
+//                       {t:"joined", id} (to the host) {t:"left", id} {t:"error", code, msg}
+//   binary frames = game packets. Each phone in a match has a slot id (host 1,
+//   guests 2..4). Client -> server: [target id (0 = everyone else), ...];
+//   the server rewrites byte 0 to the sender's id and forwards.
 
 "use strict";
 const http = require("http");
@@ -22,7 +25,7 @@ const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 8080);
-const PROTOCOL = 2;                       // bump when the game's netcode changes
+const PROTOCOL = 3;                       // bump when the game's netcode changes
 const RATING_WINDOW = 150;                // pair within this rating gap at first...
 const RATING_WIDEN = 40;                  // ...widening by this much per second of waiting
 const LENGTHS = ["quick", "set", "match"];
@@ -32,7 +35,7 @@ const MAX_PER_IP = 16;
 const MAX_MSGS_PER_SEC = 200;             // game traffic is ~35/s per player
 
 const queues = Object.fromEntries(LENGTHS.map((l) => [l, []]));
-const rooms = new Map();                  // code -> { host, length, golden, created }
+const rooms = new Map();                  // code -> match waiting for players (see newMatch)
 const perIp = new Map();
 let matchesStarted = 0;
 
@@ -64,6 +67,28 @@ function newCode() {
     for (let i = 0; i < 4; i++) c += CODE_CHARS[crypto.randomInt(CODE_CHARS.length)];
     if (!rooms.has(c)) return c;
   }
+}
+
+// A match: its phones by slot id. Private rooms are matches still taking players.
+function newMatch(host, length, golden, size) {
+  const m = { host, length, golden, size, members: new Map([[1, host]]), next: 2, created: Date.now() };
+  host.match = m;
+  host.slot = 1;
+  return m;
+}
+
+// Add a guest to a match and tell everyone.
+function addGuest(m, ws) {
+  const id = m.next++;
+  m.members.set(id, ws);
+  ws.match = m;
+  ws.slot = id;
+  if (m.members.size === 2) {
+    matchesStarted++;
+    send(m.host, { t: "matched", host: true, id: 1, length: m.length, golden: m.golden, size: m.size });
+  }
+  send(ws, { t: "matched", host: false, id, length: m.length, golden: m.golden, size: m.size });
+  send(m.host, { t: "joined", id });
 }
 
 // Take a socket out of any queue or room it is waiting in.
@@ -122,11 +147,7 @@ setInterval(() => {
 }, 1000);
 
 function pair(host, guest, length, golden) {
-  host.peer = guest;
-  guest.peer = host;
-  matchesStarted++;
-  send(host, { t: "matched", host: true, length, golden });
-  send(guest, { t: "matched", host: false, length, golden });
+  addGuest(newMatch(host, length, golden, 2), guest);
 }
 
 function onControl(ws, m) {
@@ -138,7 +159,11 @@ function onControl(ws, m) {
     }
     return;
   }
-  if (ws.version !== PROTOCOL || ws.peer) return; // must say hello first; no lobby actions mid-match
+  if (m.t === "start") {                          // host starts a part-filled room
+    if (ws.room) { rooms.delete(ws.room); ws.room = null; }
+    return;
+  }
+  if (ws.version !== PROTOCOL || ws.match) return; // must say hello first; no lobby actions mid-match
   switch (m.t) {
     case "quick": {
       leaveWaiting(ws);
@@ -163,7 +188,9 @@ function onControl(ws, m) {
       leaveWaiting(ws);
       const code = newCode();
       const length = LENGTHS.includes(m.length) ? m.length : "quick";
-      rooms.set(code, { host: ws, length, golden: m.golden !== false, created: Date.now() });
+      const r = newMatch(ws, length, m.golden !== false, m.size === 4 ? 4 : 2);
+      ws.match = null;                    // not in play until someone joins
+      rooms.set(code, r);
       ws.room = code;
       send(ws, { t: "room", code });
       break;
@@ -176,9 +203,12 @@ function onControl(ws, m) {
         break;
       }
       leaveWaiting(ws);
-      rooms.delete(code);
-      r.host.room = null;
-      pair(r.host, ws, r.length, r.golden);
+      r.host.match = r;
+      addGuest(r, ws);
+      if (r.members.size >= r.size) {     // full: close the room
+        rooms.delete(code);
+        r.host.room = null;
+      }
       break;
     }
     case "cancel":
@@ -207,7 +237,14 @@ wss.on("connection", (ws, req) => {
       return;
     }
     if (isBinary) {
-      if (ws.peer && ws.peer.readyState === 1) ws.peer.send(data, { binary: true });
+      const m = ws.match;
+      if (!m || data.length < 1) return;
+      const target = data[0];
+      const out = Buffer.from(data);
+      out[0] = ws.slot;
+      for (const [id, other] of m.members) {
+        if (other !== ws && (target === 0 || target === id) && other.readyState === 1) other.send(out, { binary: true });
+      }
       return;
     }
     let m;
@@ -219,10 +256,11 @@ wss.on("connection", (ws, req) => {
     leaveWaiting(ws);
     const left = (perIp.get(ip) || 1) - 1;
     if (left <= 0) perIp.delete(ip); else perIp.set(ip, left);
-    if (ws.peer) {
-      send(ws.peer, { t: "left" });
-      ws.peer.peer = null;
-      ws.peer = null;
+    const m = ws.match;
+    if (m) {
+      m.members.delete(ws.slot);
+      for (const other of m.members.values()) send(other, { t: "left", id: ws.slot });
+      ws.match = null;
     }
   });
 });
@@ -242,7 +280,7 @@ setInterval(() => {
   }
   const now = Date.now();
   for (const [code, r] of rooms) {
-    if (now - r.created > ROOM_TTL_MS) {
+    if (now - r.created > ROOM_TTL_MS && r.members.size <= 1) {
       send(r.host, { t: "error", code: "expired", msg: "Your private game expired." });
       r.host.room = null;
       rooms.delete(code);

@@ -63,6 +63,7 @@ var _near_glass: Material
 var _turf: StandardMaterial3D
 var _apron: StandardMaterial3D
 var _lamps: Array[OmniLight3D] = []
+var _posts: Array[MeshInstance3D] = []   # side-glass posts (hidden on a panoramic court)
 
 
 func _ready() -> void:
@@ -168,7 +169,7 @@ func _build_walls() -> void:
 			_box(Vector3(0.03, GLASS_H, SIDE_GLASS_LEN), Vector3(sx * HALF_W, GLASS_H * 0.5, zc), glass, false)
 			_box(Vector3(0.01, WALL_TOP - GLASS_H, SIDE_GLASS_LEN), Vector3(sx * HALF_W, (GLASS_H + WALL_TOP) * 0.5, zc), fence, false)
 			for z: float in [HALF_L - SIDE_GLASS_LEN, HALF_L - SIDE_GLASS_LEN * 0.5]:
-				_box(Vector3(0.06, WALL_TOP, 0.06), Vector3(sx * (HALF_W + 0.03), WALL_TOP * 0.5, s * z), frame)
+				_posts.append(_box(Vector3(0.06, WALL_TOP, 0.06), Vector3(sx * (HALF_W + 0.03), WALL_TOP * 0.5, s * z), frame))
 	# middle mesh sections of the side walls
 	var mid_len := (HALF_L - SIDE_GLASS_LEN) * 2.0
 	for sx: float in [-1.0, 1.0]:
@@ -202,8 +203,10 @@ func _build_lights() -> void:
 
 
 ## A career venue's look: court and surround colours, floodlight strength.
-func apply_venue(v: Dictionary) -> void:
-	_turf.albedo_color = v.court
+func apply_venue(v: Dictionary, court_override: Variant = null) -> void:
+	_turf.albedo_color = court_override if court_override != null else v.court
+	for p in _posts:
+		p.visible = not v.get("panoramic", false)
 	_apron.albedo_color = v.apron
 	for l in _lamps:
 		l.light_energy = v.lamps

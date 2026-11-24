@@ -1,9 +1,10 @@
 class_name RelayPeer
 extends MultiplayerPeerExtension
 ## Godot multiplayer transport that runs over the Padel relay server
-## (server/relay.js) using a secure WebSocket. Once two phones are paired,
-## the host is peer 1 and the guest is peer 2, and Godot's normal RPCs work
-## exactly as they would over a direct connection.
+## (server/relay.js) using a secure WebSocket. Once phones are paired, the
+## host is peer 1 and guests are peers 2..4, and Godot's normal RPCs work
+## exactly as they would over a direct connection. Every frame carries a slot
+## byte: the target on the way out, the sender on the way in.
 ##
 ## WebSockets work through any home router or mobile network (no NAT or
 ## port-forwarding problems) and, using wss:// with a hostname, meet Apple's
@@ -11,21 +12,22 @@ extends MultiplayerPeerExtension
 
 signal queued
 signal room_created(code: String)
-signal matched(is_host: bool, length: String, golden: bool)
+signal matched(is_host: bool, length: String, golden: bool, size: int)
 signal relay_error(code: String, msg: String)
 signal closed
 
-const PROTOCOL := 2          # must match PROTOCOL in server/relay.js
+const PROTOCOL := 3          # must match PROTOCOL in server/relay.js
 const HOST_ID := 1
-const GUEST_ID := 2
 
 var _ws := WebSocketPeer.new()
 var _status := MultiplayerPeer.CONNECTION_DISCONNECTED
 var _socket_open := false
 var _paired := false
 var _is_host := false
+var _my_id := 0
+var _peers: Array[int] = []   # host: the guests; guest: [1]
 var _pending: Array[String] = []
-var _queue: Array = []        # [payload, channel, mode]
+var _queue: Array = []        # [payload, channel, mode, from]
 var _target := 0
 var _mode := MultiplayerPeer.TRANSFER_MODE_RELIABLE
 var _channel := 0
@@ -75,15 +77,17 @@ func _poll() -> void:
 			var pkt := _ws.get_packet()
 			if _ws.was_string_packet():
 				_on_control(pkt.get_string_from_utf8())
-			elif _paired and pkt.size() >= 2:
-				_queue.append([pkt.slice(2), pkt[0], pkt[1]])
+			elif _paired and pkt.size() >= 3:
+				_queue.append([pkt.slice(3), pkt[1], pkt[2], pkt[0]])
 	elif st == WebSocketPeer.STATE_CLOSED and _status != MultiplayerPeer.CONNECTION_DISCONNECTED:
 		var was_paired := _paired
 		_status = MultiplayerPeer.CONNECTION_DISCONNECTED
 		_socket_open = false
 		_paired = false
 		if was_paired:
-			peer_disconnected.emit(_other_id())
+			for id in _peers.duplicate():
+				peer_disconnected.emit(id)
+			_peers.clear()
 		if not _was_open:
 			relay_error.emit("offline", "Couldn't reach the game server. Check your internet connection.")
 		closed.emit()
@@ -100,21 +104,32 @@ func _on_control(text: String) -> void:
 			room_created.emit(str(m.get("code", "")))
 		"matched":
 			_is_host = bool(m.get("host", false))
+			_my_id = int(m.get("id", 1 if _is_host else 2))
 			_paired = true
 			_status = MultiplayerPeer.CONNECTION_CONNECTED
-			matched.emit(_is_host, str(m.get("length", "quick")), bool(m.get("golden", true)))
-		"left":
-			if _paired:
-				_paired = false
-				peer_disconnected.emit(_other_id())
+			matched.emit(_is_host, str(m.get("length", "quick")), bool(m.get("golden", true)), int(m.get("size", 2)))
 			if not _is_host:
+				_peers = [HOST_ID]
+				peer_connected.emit(HOST_ID)
+		"joined":
+			var id := int(m.get("id", 0))
+			if _is_host and id > 1 and not id in _peers:
+				_peers.append(id)
+				peer_connected.emit(id)
+		"left":
+			var id := int(m.get("id", 0))
+			if id in _peers:
+				_peers.erase(id)
+				peer_disconnected.emit(id)
+			if not _is_host and id == HOST_ID:
+				_paired = false
 				_status = MultiplayerPeer.CONNECTION_DISCONNECTED
 		"error":
 			relay_error.emit(str(m.get("code", "")), str(m.get("msg", "Something went wrong.")))
 
 
-func _other_id() -> int:
-	return GUEST_ID if _is_host else HOST_ID
+func peers() -> Array[int]:
+	return _peers
 
 
 func _get_available_packet_count() -> int:
@@ -128,7 +143,7 @@ func _get_packet_script() -> PackedByteArray:
 
 
 func _get_packet_peer() -> int:
-	return _other_id()
+	return HOST_ID if _queue.is_empty() else _queue[0][3]
 
 
 func _get_packet_channel() -> int:
@@ -142,9 +157,12 @@ func _get_packet_mode() -> MultiplayerPeer.TransferMode:
 func _put_packet_script(p_buffer: PackedByteArray) -> Error:
 	if not _paired or not _socket_open:
 		return ERR_UNCONFIGURED
-	if _target != 0 and _target != _other_id() and _target != -get_unique_id():
+	# 0 = everyone; a negative target means "everyone but that peer", which the
+	# relay can't express, so it goes to everyone (receivers ignore stray RPCs)
+	var to := _target if _target > 0 else 0
+	if to > 0 and not to in _peers:
 		return ERR_INVALID_PARAMETER
-	var frame := PackedByteArray([_channel, _mode])
+	var frame := PackedByteArray([to, _channel, _mode])
 	frame.append_array(p_buffer)
 	return _ws.send(frame, WebSocketPeer.WRITE_MODE_BINARY)
 
@@ -158,7 +176,7 @@ func _set_target_peer(p_peer: int) -> void:
 
 
 func _get_unique_id() -> int:
-	return HOST_ID if _is_host else GUEST_ID
+	return _my_id if _my_id > 0 else (HOST_ID if _is_host else 2)
 
 
 func _is_server() -> bool:
@@ -207,4 +225,5 @@ func _close() -> void:
 	_status = MultiplayerPeer.CONNECTION_DISCONNECTED
 	_socket_open = false
 	_paired = false
+	_peers.clear()
 	_queue.clear()

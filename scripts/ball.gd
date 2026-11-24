@@ -22,6 +22,13 @@ var velocity: Vector3:
 
 var _shadow: MeshInstance3D
 var _mat: StandardMaterial3D
+var _mesh: MeshInstance3D
+var _trail: MultiMeshInstance3D
+var _trail_pos: Array[Vector3] = []
+const TRAIL_N := 14
+const CONTRAST_COLOUR := Color("ff3df2")   # high-contrast: magenta reads on every court colour
+var base_colour := BALL_COLOUR
+var trail_on := false
 const BALL_COLOUR := Color("d9f542")
 const SLICE_COLOUR := Color("7fd6ff")
 ## Shown spin for the visual tint; the online guest sets this from snapshots.
@@ -41,7 +48,39 @@ func _ready() -> void:
 	m.emission_energy_multiplier = 0.35
 	mi.material_override = m
 	_mat = m
+	_mesh = mi
 	add_child(mi)
+	# fading trail of recent positions (accessibility: easier to track the ball)
+	_trail = MultiMeshInstance3D.new()
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	var tsm := SphereMesh.new()
+	tsm.radius = 0.05
+	tsm.height = 0.1
+	tsm.radial_segments = 8
+	tsm.rings = 4
+	mm.mesh = tsm
+	mm.instance_count = TRAIL_N
+	_trail.multimesh = mm
+	var tm := StandardMaterial3D.new()
+	tm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	tm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	tm.vertex_color_use_as_albedo = true
+	_trail.material_override = tm
+	_trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_trail.top_level = true
+	_trail.visible = false
+	add_child(_trail)
+
+
+## Accessibility: ball size, high-contrast colour, and the trail.
+func set_look(large: bool, contrast: bool, trail: bool) -> void:
+	_mesh.scale = Vector3.ONE * (1.5 if large else 1.0)
+	base_colour = CONTRAST_COLOUR if contrast else BALL_COLOUR
+	trail_on = trail
+	_trail.visible = trail
+	_trail_pos.clear()
 
 	_shadow = MeshInstance3D.new()
 	var cm := CylinderMesh.new()
@@ -82,10 +121,21 @@ func _physics_process(delta: float) -> void:
 	if live:
 		shown_spin = sim.spin
 	# a sliced ball glows cool blue so the spin reads on a phone screen
-	var c := BALL_COLOUR.lerp(SLICE_COLOUR, clampf(-shown_spin, 0.0, 1.0))
+	var c := base_colour.lerp(SLICE_COLOUR, clampf(-shown_spin, 0.0, 1.0))
 	_mat.albedo_color = c
 	_mat.emission = c
 	_shadow.global_position = Vector3(position.x, 0.012, position.z)
+	if trail_on:
+		if _trail_pos.is_empty() or _trail_pos[0].distance_to(position) > 0.02:
+			_trail_pos.push_front(position)
+			if _trail_pos.size() > TRAIL_N:
+				_trail_pos.pop_back()
+		var mm := _trail.multimesh
+		for i in TRAIL_N:
+			var on := i < _trail_pos.size() and live
+			var k := 1.0 - float(i) / TRAIL_N
+			mm.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * (0.3 + 0.7 * k) * _mesh.scale.x), _trail_pos[i] if on else Vector3(0, -50, 0)))
+			mm.set_instance_color(i, Color(c.r, c.g, c.b, 0.55 * k))
 	var s := clampf(1.2 - position.y * 0.12, 0.4, 1.2)
 	_shadow.scale = Vector3(s, 1, s)
 
