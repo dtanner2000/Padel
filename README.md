@@ -164,6 +164,7 @@ godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot 
 --mode=quick|set|match|practice                                           # skip the menu
 --career=club|regional|national|world  --daily                             # career match / daily challenge
 --mash-kind=chiquita|vibora|contrapared                                   # the test bot plays that shot
+--games=N                                                                 # shorter quick matches (for tests)
 --screen=career|team|locker|settings|stats|training                       # open a menu screen
 --relay=ws://127.0.0.1:8080 --online-quick                                # online test (run two copies)
 --drill=ground|aim|slice|glass|volley|smash|mix                           # start a training drill
