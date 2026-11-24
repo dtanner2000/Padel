@@ -361,6 +361,7 @@ func use_model(scene: PackedScene) -> void:
 		push_warning("character model has no skeleton")
 		return
 	_skel = found[0]
+	_skel.reset_bone_poses()       # every bone at rest: _aim_limb builds on the rest pose
 	for b in MODEL_BONES:
 		_bones[b] = _skel.find_bone(b)
 	# hide the procedural body; keep the paddle and name tag
@@ -371,37 +372,51 @@ func use_model(scene: PackedScene) -> void:
 		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 
 
-## Point `bone` (which runs towards `child`) at a world-space target.
-func _aim_bone(bone: String, child: String, target_world: Vector3) -> void:
-	var i: int = _bones.get(bone, -1)
-	var c: int = _bones.get(child, -1)
-	if i < 0 or c < 0:
-		return
-	_skel.set_bone_pose_rotation(i, _skel.get_bone_rest(i).basis.get_rotation_quaternion())
-	var gp := _skel.get_bone_global_pose(i)
-	var along := (gp.basis * _skel.get_bone_rest(c).origin).normalized()
-	var want := (_skel.global_transform.affine_inverse() * target_world - gp.origin).normalized()
-	if along.is_zero_approx() or want.is_zero_approx() or along.dot(want) > 0.99999:
-		return
-	gp.basis = Basis(Quaternion(along, want)) * gp.basis
-	_skel.set_bone_global_pose(i, gp)
+## Aim a two-bone limb (upper -> lower -> end) so the joint lands on `mid_world`
+## and the end on `end_world`. Only bone ROTATIONS are written, each computed
+## from the rest pose every frame, so nothing can accumulate: the skeleton's
+## cached global poses are never read back (a stale cache on device once let
+## position/scale errors build up until the arms stretched). Returns the end
+## bone's skeleton-space position, or null if the bones are missing.
+func _aim_limb(upper: String, lower: String, end: String, mid_world: Vector3, end_world: Vector3) -> Variant:
+	var u: int = _bones.get(upper, -1)
+	var l: int = _bones.get(lower, -1)
+	var e: int = _bones.get(end, -1)
+	if u < 0 or l < 0 or e < 0:
+		return null
+	var to_skel := _skel.global_transform.affine_inverse()
+	var p := _skel.get_bone_parent(u)
+	var parent_g := _skel.get_bone_global_rest(p) if p >= 0 else Transform3D()   # never driven
+	var ug := _aim_one(u, l, parent_g, to_skel * mid_world)
+	var lg := _aim_one(l, e, ug, to_skel * end_world)
+	return lg * _skel.get_bone_rest(e).origin
+
+
+## Rotate bone `i` (rest pose under `parent_g`) so it points at `target`
+## (skeleton space); writes its local rotation and returns its new global pose.
+func _aim_one(i: int, child: int, parent_g: Transform3D, target: Vector3) -> Transform3D:
+	var rest := _skel.get_bone_rest(i)
+	_skel.set_bone_pose_position(i, rest.origin)
+	_skel.set_bone_pose_scale(i, rest.basis.get_scale())
+	var g := parent_g * rest
+	var along := (g.basis * _skel.get_bone_rest(child).origin).normalized()
+	var want := (target - g.origin).normalized()
+	if not (along.is_zero_approx() or want.is_zero_approx() or along.dot(want) > 0.99999):
+		g.basis = Basis(Quaternion(along, want)) * g.basis
+	var local := parent_g.affine_inverse() * g
+	_skel.set_bone_pose_rotation(i, local.basis.get_rotation_quaternion())
+	return g
 
 
 func _drive_model() -> void:
-	_aim_bone("RightArm", "RightForeArm", _elbow.global_position)
-	_aim_bone("RightForeArm", "RightHand", _hand.global_position)
-	_aim_bone("LeftArm", "LeftForeArm", _off_hand.get_parent_node_3d().global_position)
-	_aim_bone("LeftForeArm", "LeftHand", _off_hand.global_position)
-	_aim_bone("LeftUpLeg", "LeftLeg", _knee_l.global_position)
-	_aim_bone("LeftLeg", "LeftFoot", _knee_l.get_node("Ankle").global_position)
-	_aim_bone("RightUpLeg", "RightLeg", _knee_r.global_position)
-	_aim_bone("RightLeg", "RightFoot", _knee_r.get_node("Ankle").global_position)
+	var wrist: Variant = _aim_limb("RightArm", "RightForeArm", "RightHand", _elbow.global_position, _hand.global_position)
+	_aim_limb("LeftArm", "LeftForeArm", "LeftHand", _off_hand.get_parent_node_3d().global_position, _off_hand.global_position)
+	_aim_limb("LeftUpLeg", "LeftLeg", "LeftFoot", _knee_l.global_position, _knee_l.get_node("Ankle").global_position)
+	_aim_limb("RightUpLeg", "RightLeg", "RightFoot", _knee_r.global_position, _knee_r.get_node("Ankle").global_position)
 	# the paddle sits in the model's real hand
-	var h: int = _bones.get("RightHand", -1)
-	if h >= 0:
-		var wrist := _skel.global_transform * _skel.get_bone_global_pose(h).origin
+	if wrist != null:
 		var along := (_hand.global_position - _elbow.global_position).normalized()
-		_grip.global_position = wrist + along * 0.07   # into the palm, not the wrist
+		_grip.global_position = _skel.global_transform * (wrist as Vector3) + along * 0.07   # into the palm
 		_grip.global_basis = _paddle_basis(along)
 
 
