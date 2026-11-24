@@ -20,9 +20,11 @@ func _ready() -> void:
 	instance = self
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	for s in SOUNDS:
-		var path := "res://assets/sfx/%s.wav" % s
-		if ResourceLoader.exists(path):
-			_streams[s] = load(path)
+		for ext in ["ogg", "wav"]:   # recorded clips are OGG; synthesised ones WAV
+			var path := "res://assets/sfx/%s.%s" % [s, ext]
+			if ResourceLoader.exists(path):
+				_streams[s] = load(path)
+				break
 	for i in POOL:
 		var p := AudioStreamPlayer3D.new()
 		p.unit_size = 9.0

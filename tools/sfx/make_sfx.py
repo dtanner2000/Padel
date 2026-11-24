@@ -124,5 +124,8 @@ def applause(sec, claps_per_sec, peak_at):
     bed = lowpass(rng.normal(size=n), 1800) * shape * 0.04   # murmur under the claps
     return out + bed
 
-save("applause", applause(2.6, 260, 0.35), 0.6)
-save("applause_big", applause(4.0, 520, 0.5), 0.75)
+# Applause is now real recordings (assets/sfx/applause*.ogg, Mixkit free licence),
+# trimmed from mixkit-small-crowd-clapping-3035 and mixkit-cheering-crowd-loud-whistle-610.
+# The synthesised versions below are kept for reference only.
+# save("applause", applause(2.6, 260, 0.35), 0.6)
+# save("applause_big", applause(4.0, 520, 0.5), 0.75)
