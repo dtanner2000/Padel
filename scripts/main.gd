@@ -47,6 +47,8 @@ const DRILL_INFO := {
 		"tip": "At the net: hit it before it bounces.\nShort, early swings."},
 	"smash": {"name": "Power smash", "goal": 3, "z": 4.2,
 		"tip": "Every hit charges SMASH. When it glows and the ball is high,\ntap SMASH to send it out of the court."},
+	"walls": {"name": "Glass targets", "goal": 5, "z": 7.4,
+		"tip": "Land it deep so it bounces up into the lit panel.\nOff the bounce only: glass on the full is out."},
 	"mix": {"name": "Free practice", "goal": 0, "z": 7.4,
 		"tip": "Everything mixed. How long a streak can you build?"},
 	"challenge": {"name": "Daily challenge", "goal": 0, "z": 7.6, "tip": ""},
@@ -57,7 +59,7 @@ const DRILL_INFO := {
 	"contrapared": {"name": "Contrapared", "goal": 3, "z": 7.4, "shot": "contrapared", "assist": false,
 		"tip": "Let the deep ball pass you, then tap HIT:\nyou play it into your own glass and over the net."},
 }
-const MIX_ORDER := ["ground", "glass", "slice", "volley", "smash", "aim"]
+const MIX_ORDER := ["ground", "glass", "slice", "volley", "smash", "aim", "walls"]
 const TRAINING_SAVE := "user://training.cfg"
 ## Online: which player each guest phone controls (peer id -> players[] index).
 ## 1v1: the guest is a rival. Doubles: 2nd and 4th phones are rivals, the 3rd
@@ -149,7 +151,7 @@ var goal_frame: Node3D
 var sfx: Sfx
 var scenery: Scenery
 # replays: a ring buffer of every frame of the rally, played back slowly after big points
-const REC_SECONDS := 2.6
+const REC_SECONDS := 5.0
 const REPLAY_SPEED := 0.45
 var _rec: Array = []               # [ball pos, spin, [rig state x4]]
 var _replay: Array = []
@@ -157,6 +159,19 @@ var _replay_t := -1.0              # < 0: not replaying
 var _replay_wait := 0.0
 var _replay_cam_side := 1.0
 var _since_replay := 99            # points since the last replay (long rallies wait their turn)
+var _rec_total := 0                # frames ever recorded this point
+var _last_hit_at := 0              # _rec_total when the ball was last struck
+var _choice_default := Callable()  # what HIT does while the end-of-match buttons are up
+var _celeb_team := -1              # team to celebrate once any replay has played
+var _celeb_match := false
+var _celeb_cam := -1               # team the camera is showing celebrating (-1: normal camera)
+var _orbit_t := -1.0               # >= 0: circling the winners after a match
+var _orbit_a0 := 0.0
+var _orbit_centre := Vector3.ZERO
+var wall_target: Node3D            # "Glass targets" drill: the lit panel
+var _wt_side := 0                  # 0 back glass, -1 / 1 side glass at the far end
+var _wt_centre := Vector2.ZERO     # back: (x, y); side: (z, y)
+const WT_SIZE := Vector2(2.2, 1.3)
 var _last_move := Vector3.ZERO
 var _squeak_cd := 0.0
 var _over_at := 0.0               # when the match/challenge ended (taps ignored briefly)
@@ -187,6 +202,10 @@ var test_games := 0
 var test_room := 2         # --room=4: --online-create makes a doubles room
 var test_court := ""      # --court=ID: quick play on that venue
 var shot_replay := false  # --screenshot=path@replay: capture during the first replay       # --games=N: shorter matches for tests
+var test_celebrate := ""  # --test-celebrate=point|match: fake a won point / match 4 s in
+var aim_test := false     # --aim-test: show the aim crosshair as if HIT were held
+var shot_event := ""     # --screenshot=path@celebrate | @orbit
+var _celeb_at := -1.0
 var mash_kind := ""      # --mash-kind=chiquita|contrapared|vibora: the bot plays that shot
 var start_mode := ""
 var start_relay := ""
@@ -258,6 +277,8 @@ func _ready() -> void:
 		if mode == "menu":
 			_apply_venue(Profile.get_v("settings", "court", "club")))
 	_make_goal_frame()
+	wall_target = _goal_node(Color("ff7a1a"))
+	wall_target.scale = Vector3(WT_SIZE.x, WT_SIZE.y, 1.0)
 	ball.set_look(Profile.ball_large(), Profile.ball_contrast(), Profile.ball_trail())
 	training.load(TRAINING_SAVE)
 	hud.set_training_info(_training_summary())
@@ -327,6 +348,10 @@ func _parse_args() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a == "--autoplay":
 			autoplay = true
+		elif a.begins_with("--test-celebrate="):
+			test_celebrate = a.get_slice("=", 1)
+		elif a == "--aim-test":
+			aim_test = true
 		elif a == "--trace":
 			trace = true
 		elif a == "--mash":
@@ -360,7 +385,8 @@ func _parse_args() -> void:
 			var v := a.get_slice("=", 1)
 			shot_path = v.get_slice("@", 0)
 			shot_replay = v.get_slice("@", 1) == "replay"
-			shot_at = 99999.0 if shot_replay else v.get_slice("@", 1).to_float()
+			shot_event = v.get_slice("@", 1) if v.get_slice("@", 1) in ["celebrate", "orbit"] else ""
+			shot_at = 99999.0 if shot_replay or shot_event != "" else v.get_slice("@", 1).to_float()
 		elif a.begins_with("--quit-after="):
 			quit_after = a.get_slice("=", 1).to_float()
 
@@ -484,7 +510,12 @@ func _apply_kit() -> void:
 	var band := Color(0, 0, 0, 0)
 	if Profile.owns("wristband"):
 		band = Roster.PALETTE[int(Profile.get_v("look", "band_col", 1))]
-	players[0].set_cosmetics(hat, Roster.PALETTE[int(Profile.get_v("look", "hat_col", 2))], band)
+	var kit_col := Color(0, 0, 0, 0)
+	for k in Roster.KITS:
+		if k[0] != "" and k[0] == Profile.get_v("look", "kit", "") and Profile.owns("kit_" + k[0]):
+			kit_col = k[2]
+	players[0].set_cosmetics(hat, Roster.PALETTE[int(Profile.get_v("look", "hat_col", 2))], band,
+		kit_col, Roster.character(lineup[0]).get("kit_key", {}))
 	if _kit_on():
 		players[0].speed *= 1.0 + 0.016 * Profile.skill("speed")
 		players[0].reach = 1.15 + 0.03 * Profile.skill("reach")
@@ -573,17 +604,40 @@ func _apply_venue(id: String) -> void:
 
 
 func _make_aim_marker() -> void:
+	# a bold crosshair on the floor: white with a dark outline so it reads on
+	# every court colour, drawn over the lines
+	var n := 128
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var c := n * 0.5
+	for y in n:
+		for x in n:
+			var dx := x + 0.5 - c
+			var dy := y + 0.5 - c
+			var r := sqrt(dx * dx + dy * dy) / c          # 0 centre .. 1 edge
+			var cross := (absf(dx) < 4.5 or absf(dy) < 4.5) and r > 0.28 and r < 0.97
+			var ring := absf(r - 0.62) < 0.09
+			var dot := r < 0.1
+			var core := cross or ring or dot
+			var cross_o := (absf(dx) < 8.0 or absf(dy) < 8.0) and r > 0.24 and r < 1.0
+			var ring_o := absf(r - 0.62) < 0.14
+			var outline := cross_o or ring_o or r < 0.15
+			if core:
+				img.set_pixel(x, y, Color(1, 1, 1, 1))
+			elif outline:
+				img.set_pixel(x, y, Color(0.05, 0.07, 0.1, 0.8))
+	img.generate_mipmaps()
 	aim_marker = MeshInstance3D.new()
-	var tm := TorusMesh.new()
-	tm.inner_radius = 0.32
-	tm.outer_radius = 0.42
-	tm.rings = 32
-	aim_marker.mesh = tm
-	aim_marker.scale = Vector3(1, 0.05, 1)
+	var qm := QuadMesh.new()
+	qm.size = Vector2(2.1, 2.1)
+	qm.orientation = PlaneMesh.FACE_Y
+	aim_marker.mesh = qm
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(1, 1, 1, 0.9)
+	m.albedo_texture = ImageTexture.create_from_image(img)
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.no_depth_test = true
+	m.render_priority = 2
 	aim_marker.material_override = m
 	aim_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	aim_marker.visible = false
@@ -733,6 +787,7 @@ func _go_menu() -> void:
 	challenge = false
 	career_venue = ""
 	goal_frame.visible = false
+	wall_target.visible = false
 	machine.position = Vector3(0, 0, -9.3)
 	Profile.save()
 	_apply_venue(Profile.get_v("settings", "court", "club"))
@@ -776,6 +831,7 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 		p.visible = p.is_human or not practice
 		p.smash_charge = 0.0
 	target_marker.visible = false
+	wall_target.visible = false
 	machine.visible = practice
 	if not challenge:
 		goal_frame.visible = false
@@ -844,6 +900,24 @@ func _career_result(won: bool) -> String:
 	Profile.set_v("career", career_venue + "_round", 0)
 	Profile.save()
 	return "Knocked out in the %s\nTry again from the quarter-final" % Roster.ROUNDS[rnd].to_lower()
+
+
+## Buttons after a career match: the next round or tour, or try again.
+func _career_choices(won: bool) -> Array:
+	var id := career_venue
+	var i := Roster.VENUES.find(Roster.venue(id))
+	var back := ["Career", _career_continue]
+	if won and career_round == Roster.ROUNDS.size() - 1:
+		var out: Array = []
+		if i + 1 < Roster.VENUES.size() and Profile.venue_unlocked(i + 1):
+			var nid: String = Roster.VENUES[i + 1].id
+			out.append(["Next: %s ›" % Roster.VENUES[i + 1].name, func() -> void: _start_career(nid)])
+		out.append(back)
+		out.append(["Menu", _go_menu])
+		return out
+	if won:
+		return [["Next: %s ›" % Roster.ROUNDS[career_round + 1], func() -> void: _start_career(id)], back]
+	return [["Try again", func() -> void: _start_career(id)], back]
 
 
 func _career_continue() -> void:
@@ -919,17 +993,22 @@ func _place_goal(t: float) -> void:
 
 
 func _make_goal_frame() -> void:
-	goal_frame = Node3D.new()
+	goal_frame = _goal_node(Color("c6f432"))
+
+
+## A 1 x 1 frame (posts, bar, line and a faint fill), scaled to size; hidden.
+func _goal_node(col: Color) -> Node3D:
+	var node := Node3D.new()
 	var lime := StandardMaterial3D.new()
-	lime.albedo_color = Color("c6f432")
+	lime.albedo_color = col
 	lime.emission_enabled = true
-	lime.emission = Color("c6f432")
+	lime.emission = col
 	lime.emission_energy_multiplier = 0.6
 	var fill := StandardMaterial3D.new()
-	fill.albedo_color = Color(0.78, 0.96, 0.2, 0.16)
+	fill.albedo_color = Color(col.r, col.g, col.b, 0.18)
 	fill.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	fill.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	# a 1 x 1 goal mouth, scaled to size: posts, crossbar, line and a faint net
+	fill.cull_mode = BaseMaterial3D.CULL_DISABLED
 	for part in [[Vector3(-0.5, 0, 0), Vector3(0.05, 1.0, 0.05)], [Vector3(0.5, 0, 0), Vector3(0.05, 1.0, 0.05)],
 			[Vector3(0, 0.5, 0), Vector3(1.05, 0.06, 0.05)], [Vector3(0, -0.5, 0), Vector3(1.05, 0.04, 0.05)]]:
 		var mi := MeshInstance3D.new()
@@ -939,17 +1018,46 @@ func _make_goal_frame() -> void:
 		mi.position = part[0]
 		mi.material_override = lime
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		goal_frame.add_child(mi)
+		node.add_child(mi)
 	var back := MeshInstance3D.new()
 	var qm := QuadMesh.new()
 	qm.size = Vector2(1, 1)
 	back.mesh = qm
-	back.rotation.y = 0.0
 	back.material_override = fill
 	back.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	goal_frame.add_child(back)
-	goal_frame.visible = false
-	add_child(goal_frame)
+	node.add_child(back)
+	node.visible = false
+	add_child(node)
+	return node
+
+
+# --- glass targets drill --------------------------------------------------------
+
+## A new lit panel on the far glass: left, middle or right of the back wall,
+## or the back stretch of either side wall.
+func _place_wall_target() -> void:
+	var pick := randi() % 5
+	var y := randf_range(0.95, 1.5)
+	if pick < 3:
+		_wt_side = 0
+		_wt_centre = Vector2((pick - 1) * 3.2, y)
+		wall_target.position = Vector3(_wt_centre.x, y, -Court.HALF_L + 0.07)
+		wall_target.rotation.y = 0.0
+	else:
+		_wt_side = -1 if pick == 3 else 1
+		_wt_centre = Vector2(-Court.HALF_L + 1.6, y)
+		wall_target.position = Vector3(_wt_side * (Court.HALF_W - 0.07), y, _wt_centre.x)
+		wall_target.rotation.y = PI * 0.5
+	wall_target.visible = true
+
+
+func _in_wall_target(pos: Vector3) -> bool:
+	var m := Ball.RADIUS + 0.06
+	if absf(pos.y - _wt_centre.y) > WT_SIZE.y * 0.5 + m:
+		return false
+	if _wt_side == 0:
+		return absf(pos.z) > Court.HALF_L - 0.3 and absf(pos.x - _wt_centre.x) <= WT_SIZE.x * 0.5 + m
+	return signf(pos.x) == _wt_side and absf(pos.x) > Court.HALF_W - 0.3 and absf(pos.z - _wt_centre.x) <= WT_SIZE.x * 0.5 + m
 
 
 func _challenge_result(goal: bool, reason: String) -> void:
@@ -990,7 +1098,8 @@ func _challenge_result(goal: bool, reason: String) -> void:
 		state_timer = 4.5
 		_over_at = elapsed
 		sfx.crowd(ch_goals >= 5)
-		hud.show_message("%d goal%s%s\nToday's best %d  ·  all-time best %d\nTap HIT to try again" % [
+		_offer([["Try again", _start_daily], ["Menu", _go_menu]])
+		hud.show_message("%d goal%s%s\nToday's best %d  ·  all-time best %d" % [
 			ch_goals, "" if ch_goals == 1 else "s", "  NEW BEST!" if new_best and ch_goals > 0 else "", best, Profile.stat("daily_best")], 4.5)
 
 
@@ -1489,7 +1598,9 @@ func _client_tick(delta: float) -> void:
 		var kind := "bandeja" if bp.y > 2.0 else "drive"
 		var tg: Array = _shot_target(kind, pad_local.world_aim(pad_local.live_aim), Court.team_sign(_my_team()), 0.75)
 		var to: Vector3 = tg[0]
-		aim_marker.position = Vector3(to.x, 0.02, to.z)
+		aim_marker.position = Vector3(to.x, 0.03, to.z)
+		aim_marker.rotation.y = elapsed * 1.2
+		aim_marker.scale = Vector3.ONE * (1.0 + 0.08 * sin(elapsed * 9.0))
 
 
 # --- point flow -----------------------------------------------------------------
@@ -1497,6 +1608,15 @@ func _client_tick(delta: float) -> void:
 func _start_point() -> void:
 	_end_replay()
 	_rec.clear()
+	_rec_total = 0
+	_last_hit_at = 0
+	_celeb_team = -1
+	_celeb_cam = -1
+	_orbit_t = -1.0
+	_choice_default = Callable()
+	hud.show_choices([])
+	for p in players:
+		p.stop_celebrating()
 	_roll_wind()
 	state = State.SERVE_WAIT
 	serve_in_play = false
@@ -1526,6 +1646,10 @@ func _start_point() -> void:
 		ball.live = false
 		ball.place(machine.position + Vector3(0, 1.0, 0.4))
 		target_marker.visible = d == "aim"
+		if d == "walls":
+			_place_wall_target()
+		else:
+			wall_target.visible = false
 		if d == "aim":
 			target_sign = -target_sign
 			target_marker.position = Vector3(target_sign * 2.6, 0.02, -7.4)
@@ -1614,6 +1738,7 @@ func _record_frame() -> void:
 	for p in players:
 		rigs.append(p.rig_state())
 	_rec.append([ball.position, ball.shown_spin, rigs])
+	_rec_total += 1
 	if _rec.size() > int(REC_SECONDS * Engine.physics_ticks_per_second):
 		_rec.pop_front()
 
@@ -1628,7 +1753,15 @@ func _maybe_replay(team: int, reason: String) -> void:
 	var epic := (rally_hits >= 20 or reason == "Out of the court!") and _since_replay >= 4
 	if special or epic:
 		_since_replay = 0
-		_replay = _rec.duplicate()
+		# from just before the decisive shot to just after: the shot, not the
+		# ball rolling about afterwards
+		var fps := Engine.physics_ticks_per_second
+		var hit_i := _rec.size() - 1 - (_rec_total - _last_hit_at)
+		var a := maxi(0, hit_i - int(1.0 * fps))
+		var b := mini(_rec.size(), maxi(hit_i, 0) + int(1.7 * fps))
+		_replay = _rec.slice(a, b)
+		if _replay.size() < 30:
+			_replay = _rec.slice(maxi(0, _rec.size() - int(2.4 * fps)))
 		_replay_wait = 1.2
 		_replay_cam_side = 1.0 if randf() < 0.5 else -1.0
 		state_timer = maxf(state_timer, _replay_wait + _replay.size() / (Engine.physics_ticks_per_second * REPLAY_SPEED) + 0.6)
@@ -1651,7 +1784,8 @@ func _tick_replay(delta: float) -> void:
 	var i := int(_replay_t)
 	if i >= _replay.size() - 1:
 		_end_replay()
-		state_timer = minf(state_timer, 0.5)
+		if state == State.POINT_OVER:
+			state_timer = minf(state_timer, 0.5)
 		return
 	var a: Array = _replay[i]
 	var b: Array = _replay[i + 1]
@@ -1679,6 +1813,93 @@ func _end_replay() -> void:
 	hud.set_banner("")
 
 
+## The winners celebrate (a high five and jumps after a match, otherwise a
+## jump or a fist pump); the other side hangs their heads. The camera comes
+## round in front of the winners, or circles them after a match.
+func _start_celebration() -> void:
+	var team := _celeb_team
+	_celeb_team = -1
+	# partners come together (on a line across the court), then celebrate
+	var mid := _team_centre(team)
+	mid.z = Court.team_sign(team) * clampf(absf(mid.z), 3.0, 7.5)
+	for i in players.size():
+		var p := players[i]
+		if not p.visible:
+			continue
+		if p.team != team:
+			p.celebrate("sad")
+			continue
+		var together := _partner(p).visible
+		var side := signf(p.position.x - _partner(p).position.x)
+		if side == 0.0:
+			side = 1.0 if i % 2 == 0 else -1.0
+		var meet: Variant = Vector3(mid.x + side * 0.5, 0.0, mid.z) if together else null
+		if _celeb_match and together:
+			p.celebrate("five", mid, meet)
+		else:
+			p.celebrate("jump" if randf() < 0.5 else "pump", null, meet)
+	_celeb_cam = team
+	_celeb_at = elapsed
+	scenery.cheer(1.0)
+	if _celeb_match:
+		_orbit_t = 0.0
+		_orbit_centre = _team_centre(team)
+		_orbit_a0 = atan2(camera.position.x - _orbit_centre.x, camera.position.z - _orbit_centre.z)
+		if _ai_human():
+			state_timer = maxf(state_timer, 8.0)
+	elif state == State.POINT_OVER:
+		state_timer = maxf(state_timer, 3.4)
+
+
+## Middle of a team's visible players, kept off the back glass for the camera.
+func _team_centre(team: int) -> Vector3:
+	var c := Vector3.ZERO
+	var n := 0
+	for p in _team(team):
+		if p.visible:
+			c += p.position
+			n += 1
+	c /= maxf(1.0, n)
+	c.z = clampf(c.z, -6.2, 6.2)
+	return c
+
+
+## End-of-match buttons; the first is also what HIT does.
+func _offer(items: Array) -> void:
+	_choice_default = items[0][1]
+	hud.show_choices(items)
+
+
+## Training: the drill's goal was reached. Next drill, keep going, or back.
+func _offer_after_drill() -> void:
+	var order: Array = []
+	for d in Hud.TRAINING:
+		var id: String = d[0]
+		if id == "mix" or (Roster.SHOTS.has(id) and not Profile.shot_unlocked(id)):
+			continue
+		order.append(id)
+	var next := ""
+	var at := order.find(drill_id)
+	for k in range(1, order.size() + 1):
+		var cand: String = order[(at + k) % order.size()]
+		if not bool(training.get_value(cand, "done", false)):
+			next = cand
+			break
+	if next == "":
+		next = "mix"
+	state = State.MATCH_OVER
+	_over_at = elapsed
+	var keep := func() -> void:
+		hud.show_choices([])
+		state = State.POINT_OVER
+		state_timer = 0.3
+	_offer([["Next: %s ›" % DRILL_INFO[next].name, func() -> void: _start_training(next)],
+		["Keep going", keep],
+		["Training", func() -> void:
+			_go_menu()
+			hud.show_training(true, _training_summary())]])
+
+
 ## Players and ball were just moved to new spots: tell physics interpolation
 ## not to slide them there from where they were (smooth 90/120 Hz screens).
 func _snap_positions() -> void:
@@ -1704,6 +1925,7 @@ func _serve(srv: Player, aim: Vector2) -> void:
 	ball.velocity = Shot.solve(ball.sim.pos, to, 12.5, 0.3)
 	ball.live = true
 	srv.swing("serve")
+	_last_hit_at = _rec_total
 	sfx.at("paddle", ball.sim.pos, -3.0)
 	serve_in_play = true
 	last_hitter_team = srv.team
@@ -1768,9 +1990,11 @@ func _practice_result(good: bool, reason: String) -> void:
 				Profile.save()
 				training.set_value(drill_id, "done", true)
 				_check_awards()
-			hud.show_message("✓ Drill complete!\n%s%s" % [DRILL_INFO[drill_id].name, "\n+1 skill point" if first else ""], 2.2)
+			hud.show_message("✓ Drill complete!\n%s%s" % [DRILL_INFO[drill_id].name, "\n+1 skill point" if first else ""], 30.0)
 			training.set_value(drill_id, "done", true)
-			state_timer = 2.2
+			training.save(TRAINING_SAVE)
+			sfx.crowd(true)
+			_offer_after_drill.call_deferred()
 		else:
 			hud.show_message("%s  ×%d" % [reason, streak], 0.9)
 	else:
@@ -1823,7 +2047,7 @@ func _point_text(team: int, reason: String, res: String, viewer: int) -> String:
 		"set":
 			return "%s\nSet %s" % [reason, who]
 		"match":
-			var tail := "\nTap HIT for a rematch" if net_role != "" else "\nTap HIT to play again"
+			var tail := "\nTap HIT for a rematch" if net_role != "" else ""
 			return ("You win the match!" if team == viewer_team else "%s take the match" % who) + tail
 	return "%s\nPoint %s" % [reason, who]
 
@@ -1839,6 +2063,9 @@ func _award(team: int, reason: String) -> void:
 		_challenge_result(false, why)
 		return
 	if practice:
+		if _drill() == "walls" and last_hitter_team == 0:
+			_practice_result(false, "Missed the panel" if reason != "Into the net" else reason)
+			return
 		if team == 0 and reason == "Out of the court!":
 			_practice_judge(ball.sim.pos, false)
 		else:
@@ -1857,6 +2084,10 @@ func _award(team: int, reason: String) -> void:
 	sfx.crowd(big)
 	scenery.cheer(1.0 if big else 0.4)
 	_maybe_replay(team, reason)
+	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita"] and team == last_hitter_team
+	if special or res in ["set", "match"] or (reason == "Out of the court!" and team == last_hitter_team):
+		_celeb_team = team
+		_celeb_match = res == "match"
 	var mine := _my_team()
 	var counted := not _ai_human()
 	if counted:
@@ -1881,8 +2112,13 @@ func _award(team: int, reason: String) -> void:
 				if team == mine:
 					Profile.add_stat("online_wins")
 		if career_venue != "":
-			here = _career_result(team == 0) + "\nTap HIT to continue"
+			here = _career_result(team == 0)
 			state_timer = 6.0
+		if net_role == "" and counted:
+			if career_venue != "":
+				_offer(_career_choices(team == 0))
+			else:
+				_offer([["Play again", func() -> void: _on_mode_chosen(mode, score.golden_point)], ["Menu", _go_menu]])
 		if net_role == "host":
 			var h: Array = [Profile.rating(), 0]
 			var g: Array = [opp_rating, 0]
@@ -1946,6 +2182,14 @@ func _on_floor(pos: Vector3) -> void:
 		else:
 			_award(1 - last_hitter_team, "Into the net")
 		return
+	if practice and last_hitter_team == 0 and not challenge and _drill() == "walls":
+		receiver_bounces += 1
+		if receiver_bounces >= 2:
+			_practice_result(false, "Missed the panel" if wall_since_bounce else "Too short to reach the glass")
+		else:
+			wall_since_bounce = false
+			_refresh_prediction()
+		return
 	if practice and last_hitter_team == 0 and not challenge:
 		_practice_judge(pos, true)
 		return
@@ -1966,6 +2210,15 @@ func _on_wall(pos: Vector3, surface: String) -> void:
 	if state != State.RALLY:
 		return
 	var end := Court.side_of(pos.z)
+	if practice and not challenge and last_hitter_team == 0 and end == 1 and _drill() == "walls":
+		if receiver_bounces == 0:
+			_practice_result(false, "Glass on the full: that's out")
+		elif surface == "glass" and _in_wall_target(pos):
+			_practice_result(true, "On the panel!")
+		else:
+			wall_since_bounce = true
+			_refresh_prediction()
+		return
 	if challenge and last_hitter_team == 0 and end == 1:
 		if absf(pos.z) > Court.HALF_L - 0.3:
 			var c := _goal_centre(ch_t)
@@ -2026,6 +2279,27 @@ func _process(delta: float) -> void:
 		camera.position = camera.position.lerp(want, 1.0 - exp(-2.5 * delta))
 		camera.look_at(bp.lerp(Vector3(0, 1.0, bp.z), 0.4))
 		return
+	if _orbit_t >= 0.0:
+		# match won: a slow lap round the winners
+		_orbit_t += delta
+		var a := _orbit_a0 + _orbit_t * 0.65
+		var want := _orbit_centre + Vector3(sin(a) * 4.0, 1.85, cos(a) * 4.0)
+		want.x = clampf(want.x, -Court.HALF_W + 0.5, Court.HALF_W - 0.5)   # stay inside the glass
+		want.z = clampf(want.z, -Court.HALF_L + 0.5, Court.HALF_L - 0.5)
+		camera.position = camera.position.lerp(want, 1.0 - exp(-lerpf(1.2, 9.0, clampf(_orbit_t / 1.6, 0.0, 1.0)) * delta))
+		camera.look_at(_orbit_centre + Vector3(0, 1.05, 0))
+		return
+	if _celeb_cam >= 0:
+		# in front of the celebrating pair, from the net side
+		var c := _team_centre(_celeb_cam)
+		var sg := Court.team_sign(_celeb_cam)
+		var spread := 0.0
+		for p in _team(_celeb_cam):
+			spread = maxf(spread, Vector2(p.position.x - c.x, p.position.z - c.z).length())
+		var want := Vector3(c.x * 0.5 + 1.3 * sg, 1.75 + spread * 0.15, c.z - sg * (3.6 + spread * 0.9))
+		camera.position = camera.position.lerp(want, 1.0 - exp(-2.8 * delta))
+		camera.look_at(c + Vector3(0, 1.0, 0))
+		return
 	var me := _me()
 	var sgn := Court.team_sign(me.team)
 	var bx := ball.position.x if (ball.live or net_role == "client") else 0.0
@@ -2049,6 +2323,11 @@ func _physics_process(delta: float) -> void:
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(shot_path)
 		print("saved ", shot_path)
+	if (shot_event == "celebrate" and _celeb_cam >= 0 and elapsed - _celeb_at > 2.4) or (shot_event == "orbit" and _orbit_t > 2.6):
+		shot_event = ""
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(shot_path)
+		print("saved ", shot_path)
 	if shot_at > 0.0 and elapsed >= shot_at and (state == State.RALLY or net_role == "client"):
 		shot_at = -1.0
 		await RenderingServer.frame_post_draw
@@ -2062,6 +2341,18 @@ func _physics_process(delta: float) -> void:
 		var a := Vector2(randf_range(-1, 1), randf_range(-0.5, 0.8))
 		_on_shot_requested("smash" if randf() < 0.15 else Hud.swipe_kind(a), a)
 	_read_keyboard()
+	if test_celebrate != "" and elapsed > 4.0 and state == State.RALLY:
+		_celeb_team = 0
+		_celeb_match = test_celebrate == "match"
+		state = State.MATCH_OVER if _celeb_match else State.POINT_OVER
+		state_timer = 30.0
+		ring.visible = false
+		aim_marker.visible = false
+		if _celeb_match and not _ai_human():
+			_over_at = elapsed
+			_offer([["Play again", _go_menu], ["Menu", _go_menu]])
+			hud.show_message("You win the match!", 4.0)
+		test_celebrate = ""
 	if challenge:
 		if state != State.MATCH_OVER:
 			ch_t += delta
@@ -2086,6 +2377,8 @@ func _physics_process(delta: float) -> void:
 			_record_frame()
 		State.POINT_OVER:
 			_tick_replay(delta)
+			if _celeb_team >= 0 and _replay.is_empty():
+				_start_celebration()
 			for p in players:
 				if not p.replaying:
 					p.move_dir(Vector3.ZERO, delta)
@@ -2093,10 +2386,11 @@ func _physics_process(delta: float) -> void:
 			if state_timer <= 0.0:
 				_start_point()
 		State.MATCH_OVER:
+			_tick_replay(delta)
+			if _celeb_team >= 0 and _replay.is_empty():
+				_start_celebration()
 			state_timer -= delta
-			if state_timer <= 0.0 and career_venue != "" and not _ai_human():
-				_career_continue()
-			elif state_timer <= 0.0 and _ai_human():
+			if state_timer <= 0.0 and _ai_human():
 				score = MatchScore.create(score.games_per_set, score.sets_to_win, score.golden_point)
 				_start_point()
 	_update_hud()
@@ -2148,13 +2442,15 @@ func _tick_rally(delta: float) -> void:
 		ring.position = Vector3(ip.x, 0.02, ip.z)
 	# where your shot will land while you hold HIT (Red Bull added a swipe
 	# trail for touch feedback; this shows the result on court instead)
-	var aiming := not _ai_human() and last_hitter_team == 1 and pad_local.held
+	var aiming := (not _ai_human() or aim_test) and last_hitter_team == 1 and (pad_local.held or aim_test)
 	aim_marker.visible = aiming
 	if aiming:
 		var kind := "bandeja" if ball.sim.pos.y > 2.0 else "drive"
 		var t: Array = _shot_target(kind, pad_local.world_aim(pad_local.live_aim), Court.team_sign(0), 0.75)
 		var to: Vector3 = t[0]
-		aim_marker.position = Vector3(to.x, 0.02, to.z)
+		aim_marker.position = Vector3(to.x, 0.03, to.z)
+		aim_marker.rotation.y = elapsed * 1.2
+		aim_marker.scale = Vector3.ONE * (1.0 + 0.08 * sin(elapsed * 9.0))
 
 
 # --- prediction & assignment ------------------------------------------------------
@@ -2411,6 +2707,15 @@ func _on_shot_requested(kind: String, aim: Vector2) -> void:
 		return
 	if state == State.MATCH_OVER and elapsed - _over_at < 1.2:
 		return   # a stray tap straight after the end: let them read the result
+	if state == State.MATCH_OVER and _choice_default.is_valid():
+		var f := _choice_default
+		_choice_default = Callable()
+		hud.show_choices([])
+		f.call()
+		return
+	if state == State.POINT_OVER and _celeb_cam >= 0 and not _celeb_match:
+		state_timer = minf(state_timer, 0.2)   # skip the celebration
+		return
 	if state == State.MATCH_OVER and not _ai_human() and challenge:
 		_start_daily()
 		return
@@ -2657,6 +2962,7 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 	sfx.at("smash" if hard else "paddle", from, (2.0 if kind == "power_smash" else 0.0) if hard else clampf(speed * 0.35 - 6.0, -6.0, 0.0))
 	p.swing(kind)
 	p.hit_cooldown = 0.4
+	_last_hit_at = _rec_total
 	last_hitter_team = p.team
 	last_shot_kind = kind
 	receiver_bounces = 0

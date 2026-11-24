@@ -7,13 +7,17 @@ extends RefCounted
 ## speed = quicker about the court, all-round = a bit of everything.
 const CHARACTERS := [
 	{"id": "dani", "name": "DANI", "style": "All-rounder", "desc": "No weak side. Solid from the back and at the net.",
-		"skin": Color("e3b48c"), "hair": Color("3a2a20")},
+		"skin": Color("e3b48c"), "hair": Color("3a2a20"),
+		"kit_key": {"hue": 0.05, "hue_w": 0.06, "sat": Vector2(0.72, 1.01), "val": 0.35}},   # orange shirt
 	{"id": "ana", "name": "ANA", "style": "Touch", "desc": "Lobs, slices and clean timing. Hard to hurry.",
-		"skin": Color("d9a47c"), "hair": Color("5a3a26")},
+		"skin": Color("d9a47c"), "hair": Color("5a3a26"),
+		"kit_key": {"hue": 0.05, "hue_w": 0.06, "sat": Vector2(0.74, 1.01), "val": 0.35}},   # orange shirt
 	{"id": "marco", "name": "MARCO", "style": "Power", "desc": "Big smashes and heavy drives.",
-		"skin": Color("e0b48e"), "hair": Color("3b2b22")},
+		"skin": Color("e0b48e"), "hair": Color("3b2b22"),
+		"kit_key": {"hue": 0.77, "hue_w": 0.08, "sat": Vector2(0.4, 1.01), "val": 0.15}},    # purple shirt
 	{"id": "leo", "name": "LEO", "style": "Speed", "desc": "Covers every corner. Gets to balls others can't.",
-		"skin": Color("8d5a3c"), "hair": Color("1e1a18")},
+		"skin": Color("8d5a3c"), "hair": Color("1e1a18"),
+		"kit_key": {"hue": 0.0, "hue_w": 0.5, "sat": Vector2(-1.0, 0.13), "val": 0.8}},     # white shirt
 ]
 
 
@@ -60,14 +64,14 @@ const VENUES := [
 
 ## Courts for quick play only (not in the career), open from the start.
 const EXTRA_VENUES := [
-	{"id": "rooftop", "name": "City Rooftop", "sub": "Yellow court above the city lights, breezy",
-		"court": Color("d9b21f"), "apron": Color("2b2f36"), "bg": Color("0b1022"), "ambient": Color("aab8e8"),
+	{"id": "rooftop", "name": "City Rooftop", "sub": "Teal court above the city lights, breezy",
+		"court": Color("13807c"), "apron": Color("2b2f36"), "bg": Color("0b1022"), "ambient": Color("aab8e8"),
 		"ambient_e": 0.5, "sun": 0.6, "lamps": 0.32, "rivals": [0.68, 0.7, 0.72], "partner": 0.74, "crowd": 0.35,
 		"scene": "rooftop", "wind": 1.4},
 ]
 
 const COURT_COLOURS := {"blue": Color("1d64a6"), "green": Color("2f7d4e"), "red": Color("b04a2f"),
-	"yellow": Color("d9b21f"), "purple": Color("5a3fa8"), "pink": Color("d05a8f")}
+	"teal": Color("13807c"), "purple": Color("5a3fa8"), "pink": Color("c0507f"), "grey": Color("4b5563")}
 
 
 static func venue(id: String) -> Dictionary:
@@ -140,10 +144,20 @@ static func tier(rating: int) -> String:
 
 
 ## Cosmetics, bought with coins earned by playing. Looks only.
-const HATS := [["", "None", 0], ["headband", "Headband", 80], ["visor", "Visor", 120], ["cap", "Cap", 150]]
+const HATS := [["", "None", 0], ["headband", "Headband", 80], ["bandana", "Bandana", 100], ["visor", "Visor", 120], ["cap", "Cap", 150]]
 const WRISTBAND_PRICE := 60
 const PALETTE := [Color("f2f2f2"), Color("1a1d22"), Color("c6f432"), Color("ff5a4f"), Color("4fc3f7"),
-	Color("ffd34d"), Color("b07cff"), Color("ff8fc7")]
+	Color("ffd34d"), Color("b07cff"), Color("ff8fc7"), Color("d8ff1a"), Color("ff2d95"), Color("ff7a00"), Color("2bff6e")]
+## Shirt colours (90s neon): [id, name, colour, price]. Repaints your character's shirt.
+const KITS := [
+	["", "Original", Color(0, 0, 0, 0), 0],
+	["neon_yellow", "Neon", Color("d8ff1a"), 150],
+	["neon_pink", "Hot pink", Color("ff2d95"), 150],
+	["neon_orange", "Blaze", Color("ff7a00"), 150],
+	["neon_green", "Acid", Color("2bff6e"), 150],
+	["electric", "Electric", Color("1fb4ff"), 150],
+	["white", "White", Color("f4f4f4"), 120],
+]
 ## Paddle colourways over your paddle's shape: [id, name, face, trim, price].
 const SKINS := [
 	["", "Original", Color.BLACK, Color.BLACK, 0],

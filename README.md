@@ -12,7 +12,7 @@ The start menu (with a live AI match playing behind it) offers:
 
 - **Career**: four tournaments, each at its own venue and court: *Club Night* (blue, floodlit), *Regional Open* (green, sunny), *National Championship* (clay-red, sunset) and *World Tour Finals* (purple, arena). Win the quarter-final, semi-final and final (a full set) to take the title and unlock the next venue. A loss sends you back to the quarter-final. Rivals get sharper each round and at each venue.
 - **Quick match**: one set, first to 4 games, about five minutes
-- **Training**: drills with a ball machine (groundstrokes, aiming, slice, off the glass, volleys, power smash, free practice)
+- **Training**: drills with a ball machine (groundstrokes, aiming, slice, off the glass, volleys, power smash, glass targets, free practice). **Glass targets**: land the ball deep so it bounces up into a lit panel on the far back or side glass (glass on the full is out, as in a match)
 - **Daily challenge**: a goal slides across the rival back glass. Score by putting the ball into it, on the full or after a bounce. Each goal shrinks it and speeds it up, and three misses ends the run. The movement pattern is seeded by the date, so it changes daily and is the same for everyone. Today's best and your all-time best are saved.
 - **Play online**: a quick match against a random opponent, or a private game with a friend using a 4-letter code. See below.
 - **Longer match**: one set (first to 6, tie-break at 6-6) or best of three
@@ -40,15 +40,19 @@ The AI also plays víboras and chiquitas. Online, everyone has every shot.
 
 ### Venues, wind and court colours
 
-Each venue has its own surroundings: an indoor club hall (Club Night), a park (Regional Open), a beach at sunset (Nationals), and a packed arena with a panoramic all-glass court (World Tour Finals, where the crowd jumps on big points). The **City Rooftop** (yellow court, skyline) is open for quick play from the start. Outdoor courts have **wind**: a new gust each point, shown under the scoreboard ("Breezy · blowing left"). It is part of the ball physics, so the AI reads it too. There is no wind indoors, in training or online. Settings → **Court colour** overrides any venue's colour (blue, green, red, yellow, purple, pink).
+Each venue has its own surroundings: an indoor club hall (Club Night), a park (Regional Open), a beach at sunset (Nationals), and a packed arena with a panoramic all-glass court (World Tour Finals, where the crowd jumps on big points). The **City Rooftop** (teal court, skyline) is open for quick play from the start. Outdoor courts have **wind**: a new gust each point, shown under the scoreboard ("Breezy · blowing left"). It is part of the ball physics, so the AI reads it too. There is no wind indoors, in training or online. Settings → **Court colour** overrides any venue's colour (blue, green, red, teal, purple, pink, grey).
 
 ### Replays
 
-Big points get a slow-motion replay from a low side-on camera: a winning power smash, víbora, chiquita or contrapared, or (at most every fourth point) a 20-shot rally or a smash out of the court. Tap HIT to skip, or turn replays off in Settings. Offline only. Every frame of the rally is kept in a 2.6-second ring buffer (positions plus each player's rig pose) and blended back at 45 % speed.
+Big points get a slow-motion replay from a low side-on camera: a winning power smash, víbora, chiquita or contrapared, or (at most every fourth point) a 20-shot rally or a smash out of the court. Tap HIT to skip, or turn replays off in Settings. Offline only. Every frame of the rally is kept in a 5-second ring buffer (positions plus each player's rig pose); the replay shows from a second before the decisive shot to 1.7 s after it, blended back at 45 % speed.
+
+### Celebrations
+
+After a winning special shot, a smash out of the court, or a set, the winning pair celebrates (jumps or fist pumps) and the losers hang their heads, with the camera brought round in front of the winners; tap HIT to skip. After a match the winners turn and high-five, and the camera does a slow 360° lap around them. After a match, a finished drill or a daily challenge, buttons offer the next step: next round or tour, try again, next drill, keep going, or back to the menu (HIT does the first).
 
 ### Wardrobe, coins and achievements
 
-You earn **coins** for points won (2), matches (5, plus 15 for a win), career rounds (25, a title 100), first-time drills (20), daily goals (3 each) and achievements (50). The Wardrobe (Locker → Wardrobe) sells headwear (headband, visor, cap, in eight colours), a wristband, and paddle colourways. Looks only. Real-money purchases would need the App Store / Play billing plugins; the coin economy is ready for that.
+You earn **coins** for points won (2), matches (5, plus 15 for a win), career rounds (25, a title 100), first-time drills (20), daily goals (3 each) and achievements (50). The Wardrobe (Locker → Wardrobe) sells headwear (headband, Nadal-style bandana, visor, cap), 90s neon shirts (neon yellow, hot pink, blaze orange, acid green, electric blue, tournament white: a shader repaints your character's shirt colour, keyed per character in `Roster.CHARACTERS`), a pair of sweatbands, colours including four neons, and paddle colourways. Looks only. Real-money purchases would need the App Store / Play billing plugins; the coin economy is ready for that.
 
 There are 21 **achievements** (Stats → Achievements).
 
@@ -192,9 +196,11 @@ godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot 
 --court=ID                                                                # quick play on a venue (e.g. rooftop)
 --online-create=quick --room=4                                            # doubles room (join with --online-join=CODE)
 --screenshot=path.png@replay                                              # capture during the first replay
+--screenshot=path.png@celebrate | @orbit                                  # capture a celebration / the after-match 360
+--aim-test                                                                # show the aim crosshair as if HIT were held
 --screen=career|team|locker|settings|stats|training                       # open a menu screen
 --relay=ws://127.0.0.1:8080 --online-quick                                # online test (run two copies)
---drill=ground|aim|slice|glass|volley|smash|mix                           # start a training drill
+--drill=ground|aim|slice|glass|volley|smash|walls|mix                         # start a training drill
 godot --path . -s tools/pose_test.gd -- out                               # render the player rig in poses
 --trace                                                                   # print every shot
 --screenshot=out.png@8                                                    # save a frame (needs a renderer)

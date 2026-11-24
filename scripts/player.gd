@@ -60,6 +60,11 @@ const MODEL_BONES := ["Spine01", "LeftArm", "LeftForeArm", "LeftHand", "RightArm
 var _run_phase := 0.0
 var _swinging := false
 var replaying := false     # a replay is posing the rig: skip the live animation
+var celebrate_kind := ""   # "" | "jump" | "pump" | "five" | "sad": after a big point
+var _celeb_t := 0.0
+var _celeb_yaw := 0.0
+var _meet: Variant = null   # Vector3: jog here first (partners come together), then celebrate
+var _band_off: MeshInstance3D   # second sweatband, on the free wrist
 var _hat: Node3D           # cosmetic headwear, on the model's head bone
 var _band: MeshInstance3D  # cosmetic wristband on the paddle arm
 var _hat_holder: Node3D
@@ -79,6 +84,12 @@ static var POSE_UP := _arm_pose(Vector3(0.45, 1, 0.1), Vector3(-0.25, -0.35, 0.9
 static var POSE_OVER := _arm_pose(Vector3(0.05, -0.55, -1), Vector3(-0.4, -0.75, -0.55))    # overhead follow-through
 static var POSE_UNDER_BACK := _arm_pose(Vector3(0.35, -0.85, 0.55), Vector3(0.25, -0.55, 0.85))
 static var POSE_UNDER_THROUGH := _arm_pose(Vector3(0.15, -0.15, -1), Vector3(0, 0.55, -1))
+# celebrations
+static var POSE_CHEER := _arm_pose(Vector3(0.3, 1, 0.05), Vector3(0.1, 1, -0.15))          # paddle straight up
+static var POSE_PUMP_LOW := _arm_pose(Vector3(0.45, -0.25, -0.85), Vector3(0.05, 1, -0.25))  # fist cocked at the shoulder
+static var POSE_PUMP_HIGH := _arm_pose(Vector3(0.35, 0.95, -0.3), Vector3(0.15, 1, -0.15))
+static var POSE_FIVE := _arm_pose(Vector3(0.05, 1, -0.6), Vector3(-0.1, 1, -0.45))         # reaching up and forward
+static var POSE_HANG := _arm_pose(Vector3(0.15, -1, 0.05), Vector3(0.05, -1, -0.3))         # arm hanging, paddle down
 
 
 ## [shoulder Quaternion, elbow bend] that points the upper arm along `upper`
@@ -158,9 +169,11 @@ func apply_rig_state(a: Array) -> void:
 
 ## Cosmetics: headwear ("" | "headband" | "cap" | "visor") and wristband colour
 ## (transparent = none). Needs a character model (attached to its head bone).
-func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
+func set_cosmetics(hat: String, hat_col: Color, band_col: Color, kit_col := Color(0, 0, 0, 0), kit_key := {}) -> void:
 	if _skel == null:
 		return
+	_kit_col = kit_col
+	_kit_key = kit_key
 	if _hat:
 		_hat.queue_free()
 		_hat = null
@@ -193,6 +206,22 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 		match hat:
 			"headband":
 				add.call(ring, Vector3(0, 0.2, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
+			"bandana":
+				# a deeper band tied at the back, two tails hanging down
+				var deep := CylinderMesh.new()
+				deep.top_radius = 0.097
+				deep.bottom_radius = 0.101
+				deep.height = 0.055
+				deep.radial_segments = 16
+				add.call(deep, Vector3(0, 0.205, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
+				var knot := SphereMesh.new()
+				knot.radius = 0.022
+				knot.height = 0.036
+				add.call(knot, Vector3(0, 0.215, -0.118))
+				var tail := BoxMesh.new()
+				tail.size = Vector3(0.03, 0.12, 0.006)
+				add.call(tail, Vector3(-0.022, 0.16, -0.13), Vector3(0.35, 0, 0.25))
+				add.call(tail, Vector3(0.024, 0.15, -0.128), Vector3(0.3, 0, -0.18))
 			"visor":
 				add.call(ring, Vector3(0, 0.2, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
 				var peak := CylinderMesh.new()
@@ -228,21 +257,31 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 		bm.height = 0.06
 		_band = _part(_grip, bm, Vector3(0, -0.06, 0), Color.BLACK)
 		_band.top_level = true
-	_band.visible = band_col.a > 0.0
-	(_band.material_override as StandardMaterial3D).albedo_color = band_col
+		_band_off = _part(_grip, bm, Vector3(0, -0.06, 0), Color.BLACK)
+		_band_off.top_level = true
+	for b in [_band, _band_off]:
+		b.visible = band_col.a > 0.0
+		(b.material_override as StandardMaterial3D).albedo_color = band_col
 
 
-## Cap on: draw the character with a material that hides the hair under the
-## cap (otherwise it pokes through a snug crown). Off: the imported material.
+## Cap on and/or a kit colour: draw the character with the shader material
+## (hides the hair under a snug cap; repaints the shirt). Neither: the
+## imported material.
+var _kit_col := Color(0, 0, 0, 0)
+var _kit_key := {}
+
+
 func _set_hair_clip(on: bool) -> void:
 	_clip_mats.clear()
+	var kit := _kit_col.a > 0.0 and not _kit_key.is_empty()
 	for n in _model.find_children("*", "MeshInstance3D", true, false):
 		var mi := n as MeshInstance3D
 		if _hat and _hat.is_ancestor_of(mi):
 			continue   # the cap itself
-		if not on:
+		if not on and not kit:
 			mi.material_override = null
 			continue
+		mi.material_override = null
 		var src := mi.get_active_material(0) as BaseMaterial3D
 		if src == null:
 			continue
@@ -251,9 +290,17 @@ func _set_hair_clip(on: bool) -> void:
 		sm.set_shader_parameter("albedo_tex", src.albedo_texture)
 		sm.set_shader_parameter("albedo_col", src.albedo_color)
 		sm.set_shader_parameter("roughness_v", src.roughness)
-		sm.set_shader_parameter("clip_on", true)
+		sm.set_shader_parameter("clip_on", on)
+		if kit:
+			sm.set_shader_parameter("kit_on", true)
+			sm.set_shader_parameter("kit_col", _kit_col)
+			sm.set_shader_parameter("key_hue", _kit_key.hue)
+			sm.set_shader_parameter("key_hue_w", _kit_key.hue_w)
+			sm.set_shader_parameter("key_sat", _kit_key.sat)
+			sm.set_shader_parameter("key_val", _kit_key.val)
 		mi.material_override = sm
-		_clip_mats.append(sm)
+		if on:
+			_clip_mats.append(sm)
 
 
 ## Keep the hair clip on the cap's rim as the head moves.
@@ -341,6 +388,105 @@ func _apply(desired: Vector3, delta: float) -> void:
 	position.z = s * clampf(absf(position.z), 0.45, Court.HALF_L - 0.35)
 
 
+# --- celebrations ----------------------------------------------------------------
+
+## kind: "jump" | "pump" | "five" (turn to `face` and reach for a high five,
+## then jump) | "sad" (the losing side: shoulders down). face: world point.
+func celebrate(kind: String, face: Variant = null, meet: Variant = null) -> void:
+	celebrate_kind = kind
+	_tag.visible = false             # the camera comes in close: no name tags
+	_celeb_t = randf() * 0.25        # partners don't move in perfect lockstep
+	if _swing and _swing.is_valid():
+		_swing.kill()
+	_swinging = false
+	vel = Vector3.ZERO
+	_celeb_yaw = rotation.y
+	_meet = meet
+	_face_pt = face
+	_aim_face()
+
+
+var _face_pt: Variant = null
+
+
+func _aim_face() -> void:
+	if _face_pt is Vector3:
+		var d: Vector3 = (_face_pt as Vector3) - position
+		if Vector2(d.x, d.z).length() > 0.05:
+			_celeb_yaw = atan2(-d.x, -d.z)
+
+
+func stop_celebrating() -> void:
+	if celebrate_kind == "":
+		return
+	celebrate_kind = ""
+	_meet = null
+	_tag.visible = true
+	_body.position.y = 0.0
+	_body.rotation = Vector3.ZERO
+	_off_shoulder.rotation = Vector3(0.1, 0, -0.25)
+	_shoulder.quaternion = POSE_READY[0]
+	_elbow.rotation.x = POSE_READY[1]
+
+
+func _arm_to(pose: Array, delta: float, rate := 12.0) -> void:
+	var k := 1.0 - exp(-rate * delta)
+	_shoulder.quaternion = _shoulder.quaternion.slerp(pose[0], k)
+	_elbow.rotation.x = lerpf(_elbow.rotation.x, pose[1], k)
+
+
+func _legs(hip: float, knee: float, spread := 0.07) -> void:
+	_hip_l.rotation = Vector3(hip, 0.0, -spread)
+	_hip_r.rotation = Vector3(hip, 0.0, spread)
+	_knee_l.rotation.x = knee
+	_knee_r.rotation.x = knee
+
+
+func _celebrate_tick(delta: float) -> void:
+	_celeb_t += delta
+	var t := _celeb_t
+	rotation.y = lerp_angle(rotation.y, _celeb_yaw, 1.0 - exp(-7.0 * delta))
+	var kind := celebrate_kind
+	if kind == "five" and t > 1.25:
+		kind = "jump"
+	var off_k := 1.0 - exp(-10.0 * delta)
+	match kind:
+		"jump":
+			# bounce on the spot, paddle and free arm up
+			var ph := fposmod(t, 0.62) / 0.62
+			var air := sin(clampf(ph / 0.72, 0.0, 1.0) * PI) if ph < 0.72 else 0.0
+			var land := sin(clampf((ph - 0.72) / 0.28, 0.0, 1.0) * PI) if ph >= 0.72 else 0.0
+			_body.position.y = 0.3 * air - 0.08 * land
+			_body.rotation.x = 0.06 * air
+			_legs(0.2 + 0.5 * air + 0.3 * land, -0.35 - 0.9 * air - 0.6 * land)
+			_arm_to(POSE_CHEER, delta, 14.0)
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(2.85, 0, -0.35), off_k)
+		"pump":
+			# feet planted, a big double fist pump
+			var pump := 0.5 + 0.5 * sin(t * TAU * 1.7)
+			_body.position.y = -0.06
+			_body.rotation.x = -0.12 * pump + 0.04
+			_legs(0.35, -0.7, 0.1)
+			_arm_to(POSE_PUMP_HIGH if pump > 0.5 else POSE_PUMP_LOW, delta, 16.0)
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(lerpf(2.0, 2.9, pump), 0, -0.3), off_k)
+		"five":
+			# turn to your partner and reach up; a little hop on the slap
+			var hop := maxf(0.0, sin(clampf((t - 0.55) / 0.35, 0.0, 1.0) * PI))
+			_body.position.y = 0.16 * hop
+			_legs(0.25 + 0.3 * hop, -0.45 - 0.5 * hop)
+			_arm_to(POSE_FIVE, delta, 10.0)
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(0.9, 0, -0.3), off_k)
+		"sad":
+			# head down, paddle hanging, a slow shake of the head (body sway)
+			_body.position.y = lerpf(_body.position.y, -0.03, off_k)
+			_body.rotation.x = lerpf(_body.rotation.x, -0.3, off_k * 0.5)
+			_body.rotation.z = 0.05 * sin(t * 1.3)
+			_legs(0.12, -0.25, 0.05)
+			_arm_to(POSE_HANG, delta, 5.0)
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(-0.05, 0, -0.08), off_k * 0.5)
+	_torso.rotation.y = lerpf(_torso.rotation.y, 0.0, off_k)
+
+
 # --- swings -------------------------------------------------------------------
 
 func _pose_tween(t: Tween, pose: Array, secs: float, trans := Tween.TRANS_QUAD, ease := Tween.EASE_OUT) -> void:
@@ -394,6 +540,27 @@ func _process(delta: float) -> void:
 		if _skel:
 			_drive_model()
 		return
+	if celebrate_kind != "":
+		if _meet is Vector3:
+			# jog in to your partner first, with the normal running legs
+			move_towards(_meet, delta)
+			_locomotion(delta)
+			if Vector2(position.x - _meet.x, position.z - _meet.z).length() < 0.12:
+				_meet = null
+				vel = Vector3.ZERO
+				_celeb_t = randf() * 0.25
+				_aim_face()
+		else:
+			_celebrate_tick(delta)
+		if _skel:
+			_drive_model()
+		return
+	_locomotion(delta)
+	if _skel:
+		_drive_model()
+
+
+func _locomotion(delta: float) -> void:
 	var run := clampf(vel.length() / maxf(speed, 0.1), 0.0, 1.0)
 	_run_phase += delta * (4.0 + 7.0 * run)
 	var s := sin(_run_phase)
@@ -425,8 +592,6 @@ func _process(delta: float) -> void:
 	if not _swinging:
 		# paddle arm breathes a little in the ready position
 		_shoulder.quaternion = Quaternion(Vector3.RIGHT, sin(_run_phase * 0.5) * 0.04) * POSE_READY[0]
-	if _skel:
-		_drive_model()
 
 
 # --- visuals ------------------------------------------------------------------
@@ -748,7 +913,10 @@ func _aim_one(i: int, child: int, parent_g: Transform3D, target: Vector3) -> Tra
 func _drive_model() -> void:
 	_update_hair_clip()
 	var wrist: Variant = _aim_limb("RightArm", "RightForeArm", "RightHand", _elbow.global_position, _hand.global_position)
-	_aim_limb("LeftArm", "LeftForeArm", "LeftHand", _off_hand.get_parent_node_3d().global_position, _off_hand.global_position)
+	var wrist_l: Variant = _aim_limb("LeftArm", "LeftForeArm", "LeftHand", _off_hand.get_parent_node_3d().global_position, _off_hand.global_position)
+	if wrist_l != null and _band_off and _band_off.visible:
+		var along_l := (_off_hand.global_position - _off_hand.get_parent_node_3d().global_position).normalized()
+		_band_off.global_transform = Transform3D(Basis(Quaternion(Vector3.UP, -along_l)), _skel.global_transform * (wrist_l as Vector3) - along_l * 0.04)
 	_aim_limb("LeftUpLeg", "LeftLeg", "LeftFoot", _knee_l.global_position, _knee_l.get_node("Ankle").global_position)
 	_aim_limb("RightUpLeg", "RightLeg", "RightFoot", _knee_r.global_position, _knee_r.get_node("Ankle").global_position)
 	# the paddle sits in the model's real hand

@@ -41,7 +41,7 @@ const TRAINING := [
 	["ground", "Groundstrokes"], ["aim", "Aiming"], ["slice", "Slice"],
 	["glass", "Off the back glass"], ["volley", "Volleys at the net"], ["smash", "Power smash"],
 	["vibora", "Víbora"], ["chiquita", "Chiquita"], ["contrapared", "Contrapared"],
-	["mix", "Free practice"],
+	["walls", "Glass targets"], ["mix", "Free practice"],
 ]
 
 
@@ -104,6 +104,7 @@ var _names: Array[Label] = []
 
 var _training: Control
 var _training_grid: GridContainer
+var _choices: HBoxContainer
 var _online: Control
 var _online_status: Label
 var _code_label: Label
@@ -141,6 +142,10 @@ func _ready() -> void:
 	_flash.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
 	_flash.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	safe.add_child(_flash)
+	_choices = HBoxContainer.new()
+	_choices.add_theme_constant_override("separation", 12)
+	_choices.visible = false
+	safe.add_child(_choices)
 
 	controls = Control.new()
 	controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -205,6 +210,7 @@ func _process(delta: float) -> void:
 
 func show_menu(on: bool) -> void:
 	_menu.visible = on
+	show_choices([])
 	for sc in _screens:
 		sc.visible = false
 	if on:
@@ -368,9 +374,34 @@ func set_rally_text(text: String) -> void:
 		_rally_panel.position = Vector2(0.0 if Profile.left_handed() else safe.size.x - _rally_panel.size.x, 0)
 
 
+## Buttons after a match or a finished drill: [[label, Callable], ...]; the
+## first is the main one. [] hides them. HIT still does the main thing.
+func show_choices(items: Array) -> void:
+	for c in _choices.get_children():
+		c.queue_free()
+	var was := _choices.visible
+	_choices.visible = not items.is_empty()
+	if items.is_empty() and was:
+		_msg_t = 0.0                 # the result text goes with its buttons
+	elif not items.is_empty():
+		_msg_t = maxf(_msg_t, 0.0) + 999.0 if _msg_t > 0.0 else 0.0
+	if is_instance_valid(controls) and _menu:
+		controls.visible = items.is_empty() and not _menu.visible   # the stick's zone would swallow the taps
+	for i in items.size():
+		var it: Array = items[i]
+		var b := _button(it[0], 17, LIME if i == 0 else Color(1, 1, 1, 0.92), INK)
+		b.custom_minimum_size = Vector2(170, 46)
+		var f: Callable = it[1]
+		b.pressed.connect(func() -> void:
+			show_choices([])
+			f.call())
+		_choices.add_child(b)
+	_layout_message()
+
+
 func show_message(text: String, seconds := 1.6) -> void:
 	_message.text = text
-	_msg_t = seconds
+	_msg_t = seconds + (999.0 if _choices and _choices.visible else 0.0)
 	_layout_message()
 
 
@@ -779,7 +810,7 @@ const SETTINGS := [
 	["ball_large", "Ball size", ["Normal", "Large"], false],
 	["court_colour", "Court colour", [], ""],
 ]
-const COURT_COLOURS := [["", "Venue"], ["blue", "Blue"], ["green", "Green"], ["red", "Red"], ["yellow", "Yellow"], ["purple", "Purple"], ["pink", "Pink"]]
+const COURT_COLOURS := [["", "Venue"], ["blue", "Blue"], ["green", "Green"], ["red", "Red"], ["teal", "Teal"], ["purple", "Purple"], ["pink", "Pink"], ["grey", "Grey"]]
 
 
 func show_settings(on: bool) -> void:
@@ -954,8 +985,28 @@ func show_wardrobe(on: bool) -> void:
 		hats.add_child(b)
 	_wardrobe_box.add_child(hats)
 	_wardrobe_box.add_child(_palette_row("Headwear colour", "hat_col", 2, refresh))
-	# wristband
-	var band := _row("Wristband")
+	# shirt
+	var kits := _row("Shirt")
+	for k in Roster.KITS:
+		var kid: String = k[0]
+		var price: int = k[3]
+		var owned := kid == "" or Profile.owns("kit_" + kid)
+		var on_now: bool = Profile.get_v("look", "kit", "") == kid
+		var bg: Color = LIME if on_now else (k[2] as Color if kid != "" else Color(1, 1, 1, 0.94))
+		if on_now and kid != "":
+			bg = (k[2] as Color).lightened(0.25)
+		if not owned:
+			bg.a = 0.35
+		var b := _button(("✓ " if on_now else "") + (k[1] if owned else "%s · %d" % [k[1], price]), 13, bg, INK)
+		b.custom_minimum_size = Vector2(92, 38)
+		b.pressed.connect(func() -> void:
+			if owned or Profile.buy("kit_" + kid, price):
+				Profile.set_v("look", "kit", kid)
+			refresh.call())
+		kits.add_child(b)
+	_wardrobe_box.add_child(kits)
+	# wristbands
+	var band := _row("Sweatbands")
 	var has_band := Profile.owns("wristband")
 	var bb := _button("Owned: pick a colour" if has_band else "Buy · %d" % Roster.WRISTBAND_PRICE, 14, Color(1, 1, 1, 0.94 if has_band else 0.3), INK)
 	bb.custom_minimum_size = Vector2(240, 38)
@@ -967,7 +1018,7 @@ func show_wardrobe(on: bool) -> void:
 	band.add_child(bb)
 	_wardrobe_box.add_child(band)
 	if has_band:
-		_wardrobe_box.add_child(_palette_row("Wristband colour", "band_col", 1, refresh))
+		_wardrobe_box.add_child(_palette_row("Sweatband colour", "band_col", 1, refresh))
 	# paddle skins
 	var skins := _row("Paddle skin")
 	for sk in Roster.SKINS:
@@ -1312,11 +1363,15 @@ func _layout_message() -> void:
 	var w := safe.size.x
 	var h := safe.size.y
 	_message.reset_size()
-	_message.position = Vector2((w - _message.size.x) * 0.5, h * 0.36 - _message.size.y * 0.5)
+	var my := h * (0.24 if _choices and _choices.visible else 0.36)
+	_message.position = Vector2((w - _message.size.x) * 0.5, my - _message.size.y * 0.5)
 	_callout.reset_size()
 	_callout.position = Vector2((w - _callout.size.x) * 0.5, h - _callout.size.y - 4)
 	_flash.reset_size()
 	_flash.position = Vector2((w - _flash.size.x) * 0.5, h * 0.2)
+	if _choices:
+		_choices.reset_size()
+		_choices.position = Vector2((w - _choices.size.x) * 0.5, my + _message.size.y * 0.5 + 18)
 	if _wind_label:
 		_wind_label.reset_size()
 		_wind_label.position = Vector2((w - _wind_label.size.x) * 0.5, _score_panel.size.y + 6)
