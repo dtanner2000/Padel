@@ -133,7 +133,8 @@ func _ready() -> void:
 ## The pose of the whole rig, for replays (see apply_rig_state).
 func rig_state() -> Array:
 	return [position, rotation.y, _body.rotation.x, _body.position.y, _hip_l.rotation.x, _hip_r.rotation.x,
-		_off_shoulder.rotation.x, _torso.rotation.y, _shoulder.quaternion, _elbow.rotation.x, visible]
+		_off_shoulder.rotation.x, _torso.rotation.y, _shoulder.quaternion, _elbow.rotation.x, visible,
+		_knee_l.rotation.x, _knee_r.rotation.x, _hip_l.rotation.z, _hip_r.rotation.z, _body.rotation.z]
 
 
 func apply_rig_state(a: Array) -> void:
@@ -148,6 +149,11 @@ func apply_rig_state(a: Array) -> void:
 	_shoulder.quaternion = a[8]
 	_elbow.rotation.x = a[9]
 	visible = a[10]
+	_knee_l.rotation.x = a[11]
+	_knee_r.rotation.x = a[12]
+	_hip_l.rotation.z = a[13]
+	_hip_r.rotation.z = a[14]
+	_body.rotation.z = a[15]
 
 
 ## Cosmetics: headwear ("" | "headband" | "cap" | "visor") and wristband colour
@@ -391,15 +397,30 @@ func _process(delta: float) -> void:
 	var run := clampf(vel.length() / maxf(speed, 0.1), 0.0, 1.0)
 	_run_phase += delta * (4.0 + 7.0 * run)
 	var s := sin(_run_phase)
-	# lean into the run, bob, and a slight split-step crouch when still
-	_body.rotation.x = -0.2 * run
-	_body.position.y = absf(s) * 0.05 * run - 0.04 * (1.0 - run)
-	# legs and off arm swing with the stride
-	_hip_l.rotation.x = s * 0.7 * run - 0.12 * (1.0 - run)
-	_hip_r.rotation.x = -s * 0.7 * run - 0.12 * (1.0 - run)
-	_off_shoulder.rotation.x = -s * 0.5 * run + 0.1
-	# torso turns slightly towards the direction of travel
+	# which way we're moving, in our own frame: forward/back strides, or the
+	# side-on shuffle padel players use to move across the court
 	var local_v := global_transform.basis.inverse() * vel
+	var dir := Vector2(local_v.x, -local_v.z)
+	var dn := dir / dir.length() if dir.length() > 0.3 else Vector2(0, 1)
+	var fwd := dn.y
+	var side := dn.x
+	# lean into the run, bob, and an athletic crouch when still
+	_body.rotation.x = -0.18 * run * fwd
+	_body.rotation.z = 0.06 * run * side
+	_body.position.y = absf(s) * 0.045 * run - 0.03 * (1.0 - run)
+	# legs: the thigh swings with the stride; the knee folds as the leg comes
+	# through (heel up behind), and stays soft when standing ready
+	var c := cos(_run_phase)
+	var stance_hip := 0.28 * (1.0 - run)      # thighs forward, knees bent: ready position
+	var stance_knee := -0.55 * (1.0 - run)
+	# side shuffle: the feet open and close together (never cross)
+	var spread := absf(s) * 0.3 * run * absf(side) + 0.06 * (1.0 - run)
+	_hip_l.rotation = Vector3(s * 0.62 * run * fwd + stance_hip, 0.0, -spread)
+	_hip_r.rotation = Vector3(-s * 0.62 * run * fwd + stance_hip, 0.0, spread)
+	_knee_l.rotation.x = stance_knee - run * (0.2 + 0.95 * maxf(0.0, c) * absf(fwd) + 0.35 * absf(side))
+	_knee_r.rotation.x = stance_knee - run * (0.2 + 0.95 * maxf(0.0, -c) * absf(fwd) + 0.35 * absf(side))
+	_off_shoulder.rotation.x = -s * 0.5 * run * fwd + 0.1
+	# torso turns slightly towards the direction of travel
 	_torso.rotation.y = lerpf(_torso.rotation.y, clampf(-local_v.x * 0.12, -0.35, 0.35), 1.0 - exp(-8.0 * delta))
 	if not _swinging:
 		# paddle arm breathes a little in the ready position

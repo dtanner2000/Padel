@@ -1662,7 +1662,7 @@ func _tick_replay(delta: float) -> void:
 		var mix := ra.duplicate()
 		mix[0] = (ra[0] as Vector3).lerp(rb[0], k)
 		mix[8] = (ra[8] as Quaternion).slerp(rb[8], k)
-		for f in [1, 2, 3, 4, 5, 6, 7, 9]:
+		for f in [1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 14, 15]:
 			mix[f] = lerpf(ra[f], rb[f], k)
 		players[j].apply_rig_state(mix)
 
