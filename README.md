@@ -93,13 +93,13 @@ With the stick idle, *move-assist* steers you to your ball (the lime ring); set 
 
 ## Characters (Higgsfield → Meshy → Godot)
 
-Your player uses a generated character (`assets/characters/you.glb`). The others are still the procedural body. The pipeline for more:
+All four players use generated characters (`assets/characters/you.glb`, `ana.glb`, `marco.glb`, `leo.glb`), about 0.8 MB each. `main.gd` loads whichever exist; a missing one falls back to the procedural body. The pipeline for more:
 
 1. **Concept image** (Higgsfield `gpt_image_2_6`, 3:4): full body, **A-pose, hands empty**, plain white background, team kit, no logos.
 2. **3D model** (`meshy_v7_image_to_3d`): `should_texture`, `enable_rigging`, `pose_mode: a-pose`, `target_polycount: 8000`. About 44 credits; the image is a few more.
 3. **Slim it:** `cd tools/gltf && npm install && node optimise.mjs raw.glb ../../assets/characters/NAME.glb`. This removes the baked animation and tangents and makes the texture a 1024 px JPEG: 3.9 MB → 0.8 MB.
 4. In the `.glb.import`, set `meshes/ensure_tangents=false` and `animation/import=false`.
-5. `player.use_model(preload("res://assets/characters/NAME.glb"))` in `main.gd`.
+5. Add the name to `models` in `_spawn_players()` in `main.gd`.
 
 No animation files are used. The procedural rig in `player.gd` keeps animating, invisibly, and each frame the model's bones are aimed at it (upper arm → elbow, forearm → hand, thigh → knee, shin → ankle). The paddle sits in the model's right hand. Swings, running and the ready pose all carry over. Bones expected: Meshy/Mixamo names (`RightArm`, `RightForeArm`, `RightHand`, `LeftUpLeg`, …), model facing +Z. `tools/inspect_char.gd` prints a model's bones and size, and `tools/pose_test.gd -- out res://assets/characters/NAME.glb` renders it in the ready, forehand and smash poses.
 

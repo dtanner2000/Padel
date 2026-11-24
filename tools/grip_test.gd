@@ -1,6 +1,6 @@
 extends SceneTree
 # Grid of paddle grip angles x poses, for tuning the hold.
-# godot --path . -s tools/grip_test.gd -- out.png "bend1,bend2,..." [view: back|front]
+# godot --path . -s tools/grip_test.gd -- out.png "0" back|front [res://assets/characters/NAME.glb]
 var frames := 0
 var cam: Camera3D
 func _init():
@@ -13,7 +13,7 @@ func _init():
 	var sun := DirectionalLight3D.new(); sun.rotation_degrees = Vector3(-45, 30, 0); root3.add_child(sun)
 	var args := OS.get_cmdline_user_args()
 	var bends: PackedStringArray = args[1].split(",")
-	var model: PackedScene = load("res://assets/characters/you.glb")
+	var model: PackedScene = load(args[3] if args.size() > 3 else "res://assets/characters/you.glb")
 	var poses := [
 		[Player.POSE_READY[0], Player.POSE_READY[1]],
 		[Vector3(-0.45, 0.0, 0.2), -0.7],          # forehand contact
