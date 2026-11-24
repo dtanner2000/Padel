@@ -19,7 +19,28 @@ The start menu (with a live AI match playing behind it) offers:
 
 The bottom row has **Team** (pick who you play as and your partner; the other two are your rivals), **AI** level (Easy/Normal/Hard, tap to cycle), **Court** (any venue you've unlocked, for quick and longer matches), **Stats** and **Settings** (sound, vibration, left-handed controls, button size, AI level, golden point).
 
-Each character has a style: Dani *All-rounder*, Ana *Touch* (cleaner timing, more lobs and slices), Marco *Power* (harder drives, more smashes) and Leo *Speed* (quicker about the court). The edge is small and applies offline only, so online play stays even. A coloured ring at each player's feet shows their team (orange = yours, purple = rivals), since the character kits are baked into the models.
+Each character has a style: Dani *All-rounder*, Ana *Touch* (cleaner timing, more lobs and slices), Marco *Power* (harder drives, more smashes) and Leo *Speed* (quicker about the court). The edge is small and applies offline only, so online play stays even. A coloured ring at each player's feet shows their team (orange = yours, purple = rivals), since the character kits are baked into the models. On the Team screen you also choose your **side**: left (revés) or right (drive); your partner takes the other.
+
+### Locker: skills and paddles (offline only)
+
+- **Skill points** come from career wins (1 per round, 3 for a title), completing a training drill for the first time (1), and scoring 5+ in the daily challenge (1 a day). Spend them on **Power** (+0.35 m/s a level), **Speed** (+1.6 %), **Reach** (+3 cm) and **Touch** (+0.012 timing), up to level 5 each.
+- **Paddles** trade control for power by shape, as real ones do. *Club Round* is the starter. *Teardrop Pro* comes from the Club Night title, *Diamond Power* from the Regional Open (most power, smaller sweet spot), *Carbon Control* from the Nationals (biggest sweet spot) and *Tour Diamond* from the World Tour Finals. Each also changes how fast SMASH charges, and the paddle in your hand changes shape and colour. AI players carry paddles that suit their style (looks only).
+
+### Signature shots
+
+Unlocked by career titles. Each also gets its own training drill.
+
+| Shot | Unlock | How |
+|---|---|---|
+| **Víbora** | Club Night | On a high ball, flick HIT sideways: a sliced overhead into a deep corner that skids low |
+| **Chiquita** | Regional Open | Swipe HIT straight down: a soft dipping ball at the net players' feet |
+| **Contrapared** | National Championship | Beaten by a deep ball? Let it pass you and tap HIT. You play it into your own back glass and back over the net (the shot is found by simulating the ball physics) |
+
+The AI also plays víboras and chiquitas. Online, everyone has every shot.
+
+### Ranked online
+
+Random quick matches are ranked (Elo, starting at 1000, K = 32; Bronze, Silver from 1050, Gold 1150, Platinum 1300, Diamond 1500). Private games with a code are unranked. The relay pairs players by rating, starting within 150 points and widening by 40 a second, so nobody waits long. After a match, both players tap HIT for a **rematch**, and each phone shows whether the other has asked. Ratings live on each phone; a server-side ladder would need accounts, which the game avoids. Game Center / Google Play Games leaderboards and friends need native plugins and are a later step.
 
 Everything is saved in `user://profile.cfg` (`scripts/profile.gd`). Training progress is in `user://training.cfg`.
 
@@ -57,7 +78,7 @@ curl https://<app-name>.fly.dev/health
 
 Then set `RELAY_URL := "wss://<app-name>.fly.dev"` in `scripts/online.gd`. Keep **one** machine: matches are held in memory. One small VM handles thousands of players. `/health` shows players online, people waiting and matches started.
 
-**Versioning:** `PROTOCOL` in `relay_peer.gd` and `relay.js` must match. When you change the netcode, bump both and deploy the server alongside the store release. Older apps get "Please update the game to play online."
+**Versioning:** `PROTOCOL` in `relay_peer.gd` and `relay.js` must match (now 2: ratings and rematch). When you change the netcode, bump both and deploy the server alongside the store release. Older apps get "Please update the game to play online."
 
 ### Testing
 
@@ -142,7 +163,8 @@ godot --headless --path . --fixed-fps 60 -- --autoplay --quit-after=600   # AI v
 godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot taps HIT as you
 --mode=quick|set|match|practice                                           # skip the menu
 --career=club|regional|national|world  --daily                             # career match / daily challenge
---screen=career|team|settings|stats|training                              # open a menu screen
+--mash-kind=chiquita|vibora|contrapared                                   # the test bot plays that shot
+--screen=career|team|locker|settings|stats|training                       # open a menu screen
 --relay=ws://127.0.0.1:8080 --online-quick                                # online test (run two copies)
 --drill=ground|aim|slice|glass|volley|smash|mix                           # start a training drill
 godot --path . -s tools/pose_test.gd -- out                               # render the player rig in poses

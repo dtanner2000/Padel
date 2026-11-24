@@ -15,7 +15,7 @@ signal matched(is_host: bool, length: String, golden: bool)
 signal relay_error(code: String, msg: String)
 signal closed
 
-const PROTOCOL := 1          # must match PROTOCOL in server/relay.js
+const PROTOCOL := 2          # must match PROTOCOL in server/relay.js
 const HOST_ID := 1
 const GUEST_ID := 2
 

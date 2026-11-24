@@ -35,7 +35,7 @@ func search_seconds() -> float:
 func quick(length := "quick") -> void:
 	if _start():
 		status.emit("Connecting…")
-		peer.send_control({"t": "quick", "length": length})
+		peer.send_control({"t": "quick", "length": length, "rating": Profile.rating()})
 
 
 func create(length: String, golden: bool) -> void:
@@ -99,3 +99,4 @@ func _process(_delta: float) -> void:
 	# before pairing, nobody else polls the socket
 	if peer and multiplayer.multiplayer_peer != peer:
 		peer.poll()
+

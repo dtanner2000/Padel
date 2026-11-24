@@ -41,6 +41,8 @@ var _swing: Tween
 var _tag: Label3D
 var _grip: Node3D           # the paddle, held in the hand
 var _fist: MeshInstance3D   # closed fingers round the handle (character models only)
+var _face: MeshInstance3D   # paddle head
+var _edge: MeshInstance3D   # paddle rim
 const FIST_Y := 0.045       # where the hand closes on the handle, from the grip origin
 const PALM := 0.06          # wrist bone -> centre of the (shrunk) palm, along the forearm
 const HAND_SHRINK := 0.55   # the model's open paddle hand, tucked inside the fist
@@ -189,10 +191,10 @@ func swing(kind := "drive") -> void:
 	last_swing = kind
 	var t := _new_swing()
 	match kind:
-		"smash", "power_smash", "bandeja":
+		"smash", "power_smash", "bandeja", "vibora":
 			_pose_tween(t, POSE_UP, 0.07)
-			_pose_tween(t, POSE_OVER, 0.12 if kind != "bandeja" else 0.16, Tween.TRANS_QUAD, Tween.EASE_IN)
-		"serve", "lob":
+			_pose_tween(t, POSE_OVER, 0.12 if kind in ["smash", "power_smash"] else 0.16, Tween.TRANS_QUAD, Tween.EASE_IN)
+		"serve", "lob", "contrapared":
 			_pose_tween(t, POSE_UNDER_BACK, 0.08)
 			_pose_tween(t, POSE_UNDER_THROUGH, 0.16)
 		_:
@@ -394,6 +396,7 @@ func _build_paddle(hand: Node3D) -> void:
 	var face := _part(grip, head, Vector3(0, 0.33, 0), dark)
 	face.rotation.x = PI * 0.5
 	face.scale = Vector3(1.0, 1.0, 1.12)
+	_face = face
 	var rim := CylinderMesh.new()
 	rim.top_radius = 0.142
 	rim.bottom_radius = 0.142
@@ -402,6 +405,28 @@ func _build_paddle(hand: Node3D) -> void:
 	var edge := _part(grip, rim, Vector3(0, 0.33, 0), trim)
 	edge.rotation.x = PI * 0.5
 	edge.scale = Vector3(1.0, 1.0, 1.12)
+	_edge = edge
+
+
+## Paddle shape and colours: round (big sweet spot), teardrop, or diamond.
+func set_paddle(shape: String, face_col: Color, trim_col: Color) -> void:
+	if _face == null:
+		await ready
+	var segs := 6 if shape == "diamond" else 20
+	var long: float = {"round": 1.06, "teardrop": 1.2, "diamond": 1.28}.get(shape, 1.1)
+	var wide := 1.12 if shape == "diamond" else 1.0
+	var y := 0.35 if shape != "round" else 0.33
+	for part: MeshInstance3D in [_face, _edge]:
+		var cm := (part.mesh as CylinderMesh).duplicate() as CylinderMesh
+		cm.radial_segments = segs
+		part.mesh = cm
+		part.position.y = y
+		# a 6-sided "cylinder" has a corner on the shaft line: stretched along the
+		# shaft it is a diamond paddle with a point at the top
+		part.basis = Basis(Vector3.RIGHT, PI * 0.5)
+		part.scale = Vector3(wide, 1.0, long)
+	(_face.material_override as StandardMaterial3D).albedo_color = face_col
+	(_edge.material_override as StandardMaterial3D).albedo_color = trim_col
 
 
 # --- skinned model ---------------------------------------------------------------

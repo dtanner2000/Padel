@@ -89,3 +89,35 @@ static func today() -> String:
 
 static func daily_best(date := "") -> int:
 	return int(get_v("daily", date if date != "" else today(), 0))
+
+
+# --- paddles, skills, shots, side, rating ------------------------------------------
+
+static func paddle_id() -> String: return get_v("kit", "paddle", "club")
+
+
+static func paddle_owned(id: String) -> bool:
+	var u: String = Roster.paddle(id).unlock
+	return u == "" or career_won(u)
+
+
+static func skill(id: String) -> int: return int(get_v("skills", id, 0))
+
+
+## Skill points: earned minus spent.
+static func skill_points() -> int:
+	var spent := 0
+	for s in Roster.SKILLS:
+		spent += skill(s[0])
+	return stat("skill_points_earned") - spent
+
+
+static func shot_unlocked(id: String) -> bool:
+	return career_won(Roster.SHOTS[id].unlock) or get_v("debug", "all_shots", false)
+
+
+## "left" (revés side) or "right" (drive side) of your team's half.
+static func side() -> String: return get_v("team", "side", "left")
+
+
+static func rating() -> int: return int(get_v("online", "rating", 1000))

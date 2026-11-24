@@ -8,7 +8,7 @@
 // Protocol (WebSocket):
 //   text frames  = JSON control messages
 //     client -> server  {t:"hello", v}              protocol version check
-//                       {t:"quick", length}          join the random queue
+//                       {t:"quick", length, rating}  join the random queue (paired by rating)
 //                       {t:"create", length, golden} make a private room
 //                       {t:"join", code}             join a private room
 //                       {t:"cancel"}                 leave queue/room
@@ -22,7 +22,9 @@ const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 8080);
-const PROTOCOL = 1;                       // bump when the game's netcode changes
+const PROTOCOL = 2;                       // bump when the game's netcode changes
+const RATING_WINDOW = 150;                // pair within this rating gap at first...
+const RATING_WIDEN = 40;                  // ...widening by this much per second of waiting
 const LENGTHS = ["quick", "set", "match"];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I
 const ROOM_TTL_MS = 30 * 60 * 1000;
@@ -79,6 +81,46 @@ function leaveWaiting(ws) {
   }
 }
 
+// How far apart two ratings may be: generous after a wait, so nobody is stuck.
+function ratingWindow(ws, now) {
+  return RATING_WINDOW + RATING_WIDEN * Math.max(0, now - (ws.queuedAt || now)) / 1000;
+}
+
+// The waiting player nearest in rating to `ws`, if within both players' windows.
+function closestMatch(q, ws) {
+  const now = Date.now();
+  let best = null;
+  let bestGap = Infinity;
+  for (const o of q) {
+    if (o === ws || o.readyState !== 1) continue;
+    const gap = Math.abs((o.rating || 1000) - (ws.rating || 1000));
+    if (gap <= Math.max(ratingWindow(o, now), ratingWindow(ws, now)) && gap < bestGap) {
+      best = o;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+// Waiting players' windows grow each second: pair any that now fit.
+setInterval(() => {
+  for (const l of LENGTHS) {
+    const q = queues[l];
+    for (let i = 0; i < q.length; i++) {
+      const a = q[i];
+      const b = closestMatch(q.slice(i + 1), a);
+      if (b) {
+        q.splice(q.indexOf(b), 1);
+        q.splice(i, 1);
+        a.queue = null;
+        b.queue = null;
+        pair(a, b, l, true);
+        i--;
+      }
+    }
+  }
+}, 1000);
+
 function pair(host, guest, length, golden) {
   host.peer = guest;
   guest.peer = host;
@@ -101,10 +143,13 @@ function onControl(ws, m) {
     case "quick": {
       leaveWaiting(ws);
       const length = LENGTHS.includes(m.length) ? m.length : "quick";
+      ws.rating = Number.isFinite(m.rating) ? Math.max(0, Math.min(4000, m.rating)) : 1000;
+      ws.queuedAt = Date.now();
       const q = queues[length];
-      while (q.length && q[0].readyState !== 1) q.shift();
-      const other = q.shift();
+      for (let i = q.length - 1; i >= 0; i--) if (q[i].readyState !== 1) q.splice(i, 1);
+      const other = closestMatch(q, ws);
       if (other) {
+        q.splice(q.indexOf(other), 1);
         other.queue = null;
         pair(other, ws, length, true);
       } else {

@@ -60,3 +60,65 @@ static func venue(id: String) -> Dictionary:
 		if v.id == id:
 			return v
 	return VENUES[0]
+
+
+## Paddles. Real padel paddles trade control for power by shape: round
+## (big sweet spot, forgiving), teardrop (balanced), diamond (power, smaller
+## sweet spot). Effects apply to you offline only (online is even):
+##   power  = m/s added to drives, smashes and víboras
+##   touch  = timing-quality bonus (negative = a smaller sweet spot)
+##   charge = SMASH charges this much faster
+##   unlock = career title that unlocks it ("" = from the start)
+const PADDLES := [
+	{"id": "club", "name": "Club Round", "shape": "round", "face": Color("1a1d22"), "trim": Color("c6f432"),
+		"power": 0.0, "touch": 0.0, "charge": 0.0, "unlock": "", "desc": "Your first paddle. Forgiving and honest."},
+	{"id": "teardrop", "name": "Teardrop Pro", "shape": "teardrop", "face": Color("12324f"), "trim": Color("4fc3f7"),
+		"power": 0.8, "touch": 0.02, "charge": 0.1, "unlock": "club", "desc": "Balanced: a little more of everything."},
+	{"id": "diamond", "name": "Diamond Power", "shape": "diamond", "face": Color("3a0d12"), "trim": Color("ff5a4f"),
+		"power": 2.2, "touch": -0.04, "charge": 0.25, "unlock": "regional", "desc": "Heavy hitter. Time it well or it flies."},
+	{"id": "control", "name": "Carbon Control", "shape": "round", "face": Color("202020"), "trim": Color("e9e9e9"),
+		"power": 0.4, "touch": 0.07, "charge": 0.1, "unlock": "national", "desc": "Huge sweet spot. Placement over pace."},
+	{"id": "tour", "name": "Tour Diamond", "shape": "diamond", "face": Color("2b1a4d"), "trim": Color("ffd34d"),
+		"power": 2.6, "touch": 0.0, "charge": 0.3, "unlock": "world", "desc": "The champions' paddle. Power without the penalty."},
+]
+
+
+static func paddle(id: String) -> Dictionary:
+	for p in PADDLES:
+		if p.id == id:
+			return p
+	return PADDLES[0]
+
+
+## Player skills you level up offline with skill points (max level 5 each).
+## Per level: power +0.35 m/s, speed +1.6 %, reach +3 cm, touch +0.012 timing.
+const SKILLS := [
+	["power", "Power", "Harder drives and smashes"],
+	["speed", "Speed", "Quicker about the court"],
+	["reach", "Reach", "Get to wider balls"],
+	["touch", "Touch", "A bigger sweet spot"],
+]
+const SKILL_MAX := 5
+
+
+## Signature shots and the career title that unlocks each.
+const SHOTS := {
+	"vibora": {"name": "Víbora", "unlock": "club",
+		"how": "On a high ball, flick HIT sideways: a sliced overhead that skids low off the side glass."},
+	"chiquita": {"name": "Chiquita", "unlock": "regional",
+		"how": "Swipe HIT down: a soft dipping ball at the feet of players at the net."},
+	"contrapared": {"name": "Contrapared", "unlock": "national",
+		"how": "Beaten by a deep ball? Tap HIT as it passes you to play it into your own back glass and over the net."},
+}
+
+
+## Online rating tiers (Elo, everyone starts at 1000).
+const TIERS := [[0, "Bronze"], [1050, "Silver"], [1150, "Gold"], [1300, "Platinum"], [1500, "Diamond"]]
+
+
+static func tier(rating: int) -> String:
+	var name := "Bronze"
+	for t in TIERS:
+		if rating >= t[0]:
+			name = t[1]
+	return name

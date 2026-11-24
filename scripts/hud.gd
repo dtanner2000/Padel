@@ -18,6 +18,7 @@ signal career_chosen(venue: String)
 signal daily_chosen
 signal team_changed
 signal settings_changed
+signal locker_changed
 
 const LIME := Color("c6f432")
 const INK := Color("0b1220")
@@ -38,14 +39,19 @@ const MODES := [
 const TRAINING := [
 	["ground", "Groundstrokes"], ["aim", "Aiming"], ["slice", "Slice"],
 	["glass", "Off the back glass"], ["volley", "Volleys at the net"], ["smash", "Power smash"],
+	["vibora", "Víbora"], ["chiquita", "Chiquita"], ["contrapared", "Contrapared"],
 	["mix", "Free practice"],
 ]
 
 
 ## A quick sideways flick on HIT is a slice; anything with real up/down is an aimed drive.
+## A firm swipe straight down is a chiquita (main.gd falls back to a drive if
+## you haven't unlocked it).
 static func swipe_kind(aim: Vector2) -> String:
 	if absf(aim.x) >= 0.4 and absf(aim.x) > 1.8 * absf(aim.y):
 		return "slice"
+	if aim.y <= -0.55 and absf(aim.y) > 1.5 * absf(aim.x):
+		return "chiquita"
 	return "drive"
 const PRIVATE_LENGTHS := [["quick", "Quick"], ["set", "One set"], ["match", "Full"]]
 
@@ -84,6 +90,8 @@ var _settings_box: VBoxContainer
 var _stats: Control
 var _stats_grid: GridContainer
 var _longer: Control
+var _locker: Control
+var _locker_box: VBoxContainer
 var _pause_menu: Control
 var _quit_btn: Button
 var _names: Array[Label] = []
@@ -211,7 +219,7 @@ func show_online(on: bool) -> void:
 		_menu.visible = false
 		_code_label.visible = false
 		_ai_btn.visible = false
-		_online_status.text = "Play someone anywhere: a random opponent, or a friend with a code."
+		_online_status.text = "Play someone anywhere: a random opponent, or a friend with a code.\nYour rating: %d · %s  (quick matches are ranked; private games aren't)" % [Profile.rating(), Roster.tier(Profile.rating())]
 
 
 func set_online_status(text: String) -> void:
@@ -247,13 +255,18 @@ func show_training(on: bool, info := {}) -> void:
 	for d in TRAINING:
 		var id: String = d[0]
 		var sub: String = info.get(id, "")
+		var locked: bool = Roster.SHOTS.has(id) and not Profile.shot_unlocked(id)
+		if locked:
+			sub = "Locked · win %s" % Roster.venue(Roster.SHOTS[id].unlock).name
 		var b := _button("%s\n%s" % [d[1], sub if sub != "" else "Not tried yet"], 15,
-			LIME if sub.begins_with("✓") else Color(1, 1, 1, 0.94), INK)
-		b.custom_minimum_size = Vector2(300, 58)
+			LIME if sub.begins_with("✓") else (Color(1, 1, 1, 0.14) if locked else Color(1, 1, 1, 0.94)), MUTED if locked else INK)
+		b.custom_minimum_size = Vector2(300, 50)
+		b.disabled = locked
 		b.pressed.connect(func() -> void:
 			_training.visible = false
 			training_chosen.emit(id))
 		_training_grid.add_child(b)
+	_training_grid.columns = 3
 
 
 func _build_training() -> void:
@@ -487,12 +500,13 @@ func _build_menu() -> void:
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 8)
 	col.add_child(row)
-	for id in ["team", "ai", "court", "stats", "settings"]:
+	for id in ["team", "locker", "ai", "court", "stats", "settings"]:
 		var pb := _button("", 14, Color(1, 1, 1, 0.16), Color.WHITE)
 		pb.custom_minimum_size = Vector2(0, 40)
 		_pills[id] = pb
 		row.add_child(pb)
 	_pills.team.pressed.connect(func() -> void: show_team(true))
+	_pills.locker.pressed.connect(func() -> void: show_locker(true))
 	_pills.stats.pressed.connect(func() -> void: show_stats(true))
 	_pills.settings.pressed.connect(func() -> void: show_settings(true))
 	_pills.ai.pressed.connect(func() -> void:
@@ -515,6 +529,7 @@ func _build_menu() -> void:
 	_build_team()
 	_build_settings()
 	_build_stats()
+	_build_locker()
 
 
 ## Menu labels that depend on saved state (team, AI level, court, today's best).
@@ -526,6 +541,8 @@ func refresh_menu() -> void:
 	_pills.ai.text = "AI: %s" % Profile.DIFFICULTIES[Profile.difficulty()]
 	_pills.court.text = "Court: %s" % Roster.venue(Profile.get_v("settings", "court", "club")).name
 	_pills.stats.text = "Stats"
+	var pts := Profile.skill_points()
+	_pills.locker.text = "Locker%s" % ("  (%d)" % pts if pts > 0 else "")
 	_pills.settings.text = "Settings"
 	var best := Profile.daily_best()
 	_menu_buttons.daily.text = "Daily challenge\n%s" % ("Today's best: %d goals" % best if best > 0 else "Hit the moving goal on the back glass")
@@ -678,6 +695,24 @@ func show_team(on: bool) -> void:
 				show_team(true))
 			row.add_child(b)
 		_team_box.add_child(row)
+	var side_row := HBoxContainer.new()
+	side_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	side_row.add_theme_constant_override("separation", 8)
+	var sh := _label("Your side", 15, MUTED)
+	sh.custom_minimum_size = Vector2(96, 0)
+	side_row.add_child(sh)
+	for sd in [["left", "Left · revés side"], ["right", "Right · drive side"]]:
+		var sid: String = sd[0]
+		var picked := Profile.side() == sid
+		var sb := _button(sd[1], 15, LIME if picked else Color(1, 1, 1, 0.94), INK)
+		sb.custom_minimum_size = Vector2(200, 40)
+		sb.pressed.connect(func() -> void:
+			Profile.set_v("team", "side", sid)
+			Profile.save()
+			team_changed.emit()
+			show_team(true))
+		side_row.add_child(sb)
+	_team_box.add_child(side_row)
 	var me := Roster.character(lu[0])
 	var mate := Roster.character(lu[1])
 	var info := _label("%s: %s\n%s: %s\nRivals: %s & %s" % [me.name, me.desc, mate.name, mate.desc,
@@ -740,6 +775,81 @@ func show_settings(on: bool) -> void:
 	_open(_settings)
 
 
+func _build_locker() -> void:
+	var sc := _screen("Locker", "Skills and paddles help you in career, training and quick play. Online is always even.")
+	_locker = sc[0]
+	_locker_box = VBoxContainer.new()
+	_locker_box.add_theme_constant_override("separation", 6)
+	sc[1].add_child(_locker_box)
+	sc[1].add_child(_back_button(_locker, "Done"))
+
+
+func show_locker(on: bool) -> void:
+	if not on:
+		_locker.visible = false
+		return
+	for c in _locker_box.get_children():
+		c.queue_free()
+	var pts := Profile.skill_points()
+	var head := _label("Skill points: %d   ·   earn them by winning career matches, completing drills and scoring 5+ in the daily challenge" % pts, 14, LIME if pts > 0 else MUTED)
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_locker_box.add_child(head)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 4)
+	_locker_box.add_child(grid)
+	for sk in Roster.SKILLS:
+		var sid: String = sk[0]
+		var lvl := Profile.skill(sid)
+		var name := _label(sk[1], 16, Color.WHITE)
+		name.custom_minimum_size = Vector2(80, 0)
+		grid.add_child(name)
+		var bar := _label("■".repeat(lvl) + "□".repeat(Roster.SKILL_MAX - lvl), 18, LIME)
+		grid.add_child(bar)
+		grid.add_child(_label(sk[2], 13, MUTED))
+		var up := _button("+", 18, LIME if pts > 0 and lvl < Roster.SKILL_MAX else Color(1, 1, 1, 0.12), INK)
+		up.custom_minimum_size = Vector2(52, 34)
+		up.disabled = pts <= 0 or lvl >= Roster.SKILL_MAX
+		up.pressed.connect(func() -> void:
+			Profile.set_v("skills", sid, lvl + 1)
+			Profile.save()
+			locker_changed.emit()
+			show_locker(true))
+		grid.add_child(up)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 6)
+	_locker_box.add_child(row)
+	var current := Profile.paddle_id()
+	for pd in Roster.PADDLES:
+		var pid: String = pd.id
+		var owned := Profile.paddle_owned(pid)
+		var picked: bool = pid == current
+		var stats := "Power %s · Control %s" % [_pips(pd.power / 2.6), _pips(0.5 + pd.touch / 0.14)]
+		var text := "%s\n%s" % [pd.name, stats if owned else "Win %s" % Roster.venue(pd.unlock).name]
+		var b := _button(text, 13, LIME if picked else ((pd.trim as Color).darkened(0.55) if owned else Color(1, 1, 1, 0.1)),
+			INK if picked else (Color.WHITE if owned else MUTED))
+		b.custom_minimum_size = Vector2(158, 50)
+		b.disabled = not owned
+		b.pressed.connect(func() -> void:
+			Profile.set_v("kit", "paddle", pid)
+			Profile.save()
+			locker_changed.emit()
+			show_locker(true))
+		row.add_child(b)
+	var desc := _label("%s: %s" % [Roster.paddle(current).name, Roster.paddle(current).desc], 14, Color.WHITE)
+	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_locker_box.add_child(desc)
+	_open(_locker)
+
+
+## 0..1 as five pips.
+func _pips(v: float) -> String:
+	var n := clampi(roundi(clampf(v, 0.0, 1.0) * 5.0), 0, 5)
+	return "●".repeat(n) + "○".repeat(5 - n)
+
+
 func _build_stats() -> void:
 	var sc := _screen("Your stats")
 	_stats = sc[0]
@@ -774,6 +884,8 @@ func show_stats(on: bool) -> void:
 		["Perfect hits", str(Profile.stat("perfect"))], ["Slices", str(Profile.stat("slices"))],
 		["Career titles", "%d of %d" % [trophies, Roster.VENUES.size()]], ["Drills complete", "%d of %d" % [drills, TRAINING.size() - 1]],
 		["Daily best", "%d goals" % Profile.stat("daily_best")], ["Online wins", "%d of %d" % [Profile.stat("online_wins"), Profile.stat("online_matches")]],
+		["Víboras", str(Profile.stat("vibora"))], ["Chiquitas", str(Profile.stat("chiquita"))],
+		["Contraparedes", str(Profile.stat("contrapared"))], ["Online rating", "%d · %s" % [Profile.rating(), Roster.tier(Profile.rating())]],
 	]
 	for r in rows:
 		var k := _label(r[0], 15, MUTED)
