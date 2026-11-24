@@ -56,14 +56,36 @@ const MODEL_BONES := ["Spine01", "LeftArm", "LeftForeArm", "LeftHand", "RightArm
 var _run_phase := 0.0
 var _swinging := false
 
-# arm poses: [shoulder rot (x, y, z), elbow rot x]
-const POSE_READY := [Vector3(-0.2, 0.25, 0.32), -1.25]
-const POSE_BACK := [Vector3(-0.35, 1.35, 0.35), -0.85]
-const POSE_THROUGH := [Vector3(-0.6, -1.45, 0.05), -0.55]
-const POSE_UP := [Vector3(-2.75, 0.35, 0.15), -1.35]     # paddle cocked behind the head
-const POSE_OVER := [Vector3(-0.35, -0.25, 0.05), -0.15]   # overhead follow-through
-const POSE_UNDER_BACK := [Vector3(0.75, 0.2, 0.15), -0.25]
-const POSE_UNDER_THROUGH := [Vector3(-1.2, -0.25, 0.1), -0.45]
+# Paddle-arm poses, written as where the upper arm and the forearm point, in
+# the player's own frame: +x = out to the paddle side, +y = up, -z = forwards
+# (towards the net). _arm_pose() turns each into a shoulder rotation plus an
+# elbow bend, so the elbow only ever bends the way a real one does.
+static var POSE_READY := _arm_pose(Vector3(0.3, -1, -0.15), Vector3(-0.1, 0.25, -1))       # forearm forwards at the waist
+static var POSE_BACK := _arm_pose(Vector3(0.85, -0.55, 0.45), Vector3(0.55, 0.15, 0.8))     # forehand take-back, out to the side
+static var POSE_THROUGH := _arm_pose(Vector3(-0.25, -0.45, -1), Vector3(-1, 0.35, -0.2))     # follow-through across the front
+static var POSE_SLICE_BACK := _arm_pose(Vector3(0.8, -0.1, 0.5), Vector3(0.3, 0.75, 0.6))   # high take-back
+static var POSE_SLICE_THROUGH := _arm_pose(Vector3(-0.1, -0.8, -0.7), Vector3(-0.9, -0.35, -0.5))   # cuts down and across
+static var POSE_UP := _arm_pose(Vector3(0.45, 1, 0.1), Vector3(-0.25, -0.35, 0.9))          # elbow high, paddle cocked behind the head
+static var POSE_OVER := _arm_pose(Vector3(0.05, -0.55, -1), Vector3(-0.4, -0.75, -0.55))    # overhead follow-through
+static var POSE_UNDER_BACK := _arm_pose(Vector3(0.35, -0.85, 0.55), Vector3(0.25, -0.55, 0.85))
+static var POSE_UNDER_THROUGH := _arm_pose(Vector3(0.15, -0.15, -1), Vector3(0, 0.55, -1))
+
+
+## [shoulder Quaternion, elbow bend] that points the upper arm along `upper`
+## and the forearm along `fore`. The rig's arm hangs along -y and the elbow
+## bends about the shoulder's x axis (positive = forearm towards the shoulder's
+## -z), so the shoulder is turned to put `fore` in that bending plane.
+static func _arm_pose(upper: Vector3, fore: Vector3) -> Array:
+	var u := upper.normalized()
+	var f := fore.normalized()
+	var y := -u
+	var perp := f - u * f.dot(u)
+	if perp.length() < 0.05:
+		perp = Vector3(0, 0, -1) - u * -u.z      # straight arm: any plane will do
+	var z := -perp.normalized()
+	var x := y.cross(z).normalized()
+	var bend := acos(clampf(u.dot(f), -1.0, 1.0))
+	return [Basis(x, y, z).orthonormalized().get_rotation_quaternion(), bend]
 
 
 func setup(p_team: int, p_name: String, p_slot: float, p_shirt: Color, p_skin: Color, p_hair: Color, human := false) -> Player:
@@ -119,7 +141,7 @@ func _apply(desired: Vector3, delta: float) -> void:
 # --- swings -------------------------------------------------------------------
 
 func _pose_tween(t: Tween, pose: Array, secs: float, trans := Tween.TRANS_QUAD, ease := Tween.EASE_OUT) -> void:
-	t.tween_property(_shoulder, "rotation", pose[0], secs).set_trans(trans).set_ease(ease)
+	t.tween_property(_shoulder, "quaternion", pose[0], secs).set_trans(trans).set_ease(ease)   # slerps
 	t.parallel().tween_property(_elbow, "rotation:x", pose[1], secs).set_trans(trans).set_ease(ease)
 
 
@@ -153,8 +175,8 @@ func swing(kind := "drive") -> void:
 		_:
 			# forehand; a slice cuts down through the ball with an open face
 			if kind == "slice":
-				_pose_tween(t, [POSE_BACK[0] + Vector3(-0.35, 0, 0), POSE_BACK[1]], 0.06)
-				_pose_tween(t, [POSE_THROUGH[0] + Vector3(0.45, 0, 0), POSE_THROUGH[1]], 0.13)
+				_pose_tween(t, POSE_SLICE_BACK, 0.06)
+				_pose_tween(t, POSE_SLICE_THROUGH, 0.13)
 			else:
 				_pose_tween(t, POSE_BACK, 0.06)
 				_pose_tween(t, POSE_THROUGH, 0.11)
@@ -174,13 +196,13 @@ func _process(delta: float) -> void:
 	# legs and off arm swing with the stride
 	_hip_l.rotation.x = s * 0.7 * run - 0.12 * (1.0 - run)
 	_hip_r.rotation.x = -s * 0.7 * run - 0.12 * (1.0 - run)
-	_off_shoulder.rotation.x = -s * 0.5 * run - 0.35
+	_off_shoulder.rotation.x = -s * 0.5 * run + 0.1
 	# torso turns slightly towards the direction of travel
 	var local_v := global_transform.basis.inverse() * vel
 	_torso.rotation.y = lerpf(_torso.rotation.y, clampf(-local_v.x * 0.12, -0.35, 0.35), 1.0 - exp(-8.0 * delta))
 	if not _swinging:
 		# paddle arm breathes a little in the ready position
-		_shoulder.rotation = POSE_READY[0] + Vector3(sin(_run_phase * 0.5) * 0.04, 0, 0)
+		_shoulder.quaternion = Quaternion(Vector3.RIGHT, sin(_run_phase * 0.5) * 0.04) * POSE_READY[0]
 	if _skel:
 		_drive_model()
 
@@ -276,10 +298,10 @@ func _build() -> void:
 
 	# off arm, relaxed and slightly forward for balance
 	_off_shoulder = _joint(_torso, Vector3(-0.24, 0.6, 0))
-	_off_shoulder.rotation = Vector3(-0.35, 0, -0.25)
+	_off_shoulder.rotation = Vector3(0.1, 0, -0.25)
 	_part(_off_shoulder, _capsule(0.06, 0.32), Vector3(0, -0.14, 0), shirt)   # sleeve
 	var off_elbow := _joint(_off_shoulder, Vector3(0, -0.28, 0))
-	off_elbow.rotation.x = -0.6
+	off_elbow.rotation.x = 0.7      # forearm forwards (positive bends towards the front)
 	_part(off_elbow, _capsule(0.05, 0.3), Vector3(0, -0.13, 0), skin)
 	_off_hand = _joint(off_elbow, Vector3(0, -0.28, 0))
 
@@ -296,7 +318,7 @@ func _build() -> void:
 	_hand = _joint(_elbow, Vector3(0, -0.28, 0))
 	_part(_hand, _sphere(0.045), Vector3.ZERO, skin)
 	_build_paddle(_hand)
-	_shoulder.rotation = POSE_READY[0]
+	_shoulder.quaternion = POSE_READY[0]
 	_elbow.rotation.x = POSE_READY[1]
 
 	_tag = Label3D.new()

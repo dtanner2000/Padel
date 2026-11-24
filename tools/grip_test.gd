@@ -15,9 +15,9 @@ func _init():
 	var bends: PackedStringArray = args[1].split(",")
 	var model: PackedScene = load(args[3] if args.size() > 3 else "res://assets/characters/you.glb")
 	var poses := [
-		[Player.POSE_READY[0], Player.POSE_READY[1]],
-		[Vector3(-0.45, 0.0, 0.2), -0.7],          # forehand contact
-		[Vector3(-2.9, 0.0, 0.1), -0.4],           # smash contact
+		Player.POSE_READY,
+		Player._arm_pose(Vector3(0.75, -0.45, -0.45), Vector3(0.35, 0.05, -1)),   # forehand contact
+		Player._arm_pose(Vector3(0.25, 1, -0.2), Vector3(0.1, 1, -0.3)),          # smash contact
 	]
 	for r in bends.size():
 		for c in 3:
@@ -34,7 +34,7 @@ func _process(_d):
 		if p is Player and p._shoulder:
 			p._swinging = true
 			var pose: Array = p.get_meta("pose")
-			p._shoulder.rotation = pose[0]
+			p._shoulder.quaternion = pose[0]
 			p._elbow.rotation.x = pose[1]
 	var n := OS.get_cmdline_user_args()[1].split(",").size()
 	var back := OS.get_cmdline_user_args().size() < 3 or OS.get_cmdline_user_args()[2] == "back"
