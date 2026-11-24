@@ -8,15 +8,24 @@ Open the folder in **Godot 4.6** (4.4+ works) and press F5. On desktop, mouse cl
 
 ## Modes
 
-The home screen (a live AI match plays behind it):
+The start menu (with a live AI match playing behind it) offers:
 
-- **Training** (first): ball-machine drills, each with a tip and a goal, and progress saved on the device. The drills are groundstrokes, aiming (land it in the lit box), slice, off the back glass, volleys at the net, power smash, and free practice (everything mixed, endless streak).
+- **Career**: four tournaments, each at its own venue and court: *Club Night* (blue, floodlit), *Regional Open* (green, sunny), *National Championship* (clay-red, sunset) and *World Tour Finals* (purple, arena). Win the quarter-final, semi-final and final (a full set) to take the title and unlock the next venue. A loss sends you back to the quarter-final. Rivals get sharper each round and at each venue.
 - **Quick match**: one set, first to 4 games, about five minutes
-- **One set**: first to 6, tie-break at 6-6
-- **Full match**: best of three
-- **Play online**: a quick match against a random opponent, or a private game with a friend using a 4-letter code. You and Ana (AI) take on them and Leo (AI). See below.
+- **Training**: drills with a ball machine (groundstrokes, aiming, slice, off the glass, volleys, power smash, free practice)
+- **Daily challenge**: a goal slides across the rival back glass. Score by putting the ball into it, on the full or after a bounce. Each goal shrinks it and speeds it up, and three misses ends the run. The movement pattern is seeded by the date, so it changes daily and is the same for everyone. Today's best and your all-time best are saved.
+- **Play online**: a quick match against a random opponent, or a private game with a friend using a 4-letter code. See below.
+- **Longer match**: one set (first to 6, tie-break at 6-6) or best of three
 
-The golden point toggle is on the menu. The pause button gives **Resume / Quit to menu**.
+The bottom row has **Team** (pick who you play as and your partner; the other two are your rivals), **AI** level (Easy/Normal/Hard, tap to cycle), **Court** (any venue you've unlocked, for quick and longer matches), **Stats** and **Settings** (sound, vibration, left-handed controls, button size, AI level, golden point).
+
+Each character has a style: Dani *All-rounder*, Ana *Touch* (cleaner timing, more lobs and slices), Marco *Power* (harder drives, more smashes) and Leo *Speed* (quicker about the court). The edge is small and applies offline only, so online play stays even. A coloured ring at each player's feet shows their team (orange = yours, purple = rivals), since the character kits are baked into the models.
+
+Everything is saved in `user://profile.cfg` (`scripts/profile.gd`). Training progress is in `user://training.cfg`.
+
+## Sound
+
+`assets/sfx/` holds a dozen short WAVs: paddle, smash, floor, glass, mesh, net, trainer squeak, UI click, goal ding, miss buzz and two applause clips. They are synthesised by `tools/sfx/make_sfx.py` (numpy + scipy, no samples, no licences), about 430 KB in all. Ball sounds are positional (`scripts/sfx.gd`), louder for faster balls, and the crowd scales with the venue. On the online guest's phone, bounces are inferred from the snapshots.
 
 ## Play online
 
@@ -112,7 +121,9 @@ No animation files are used. The procedural rig in `player.gd` keeps animating, 
 | `scripts/ball.gd` | Live ball node, substepping, trajectory prediction |
 | `scripts/shot.gd` | Projectile solver: lands a shot on a target and clears the net |
 | `scripts/court.gd` | Dimensions, wall surface lookup, procedural court geometry |
-| `scripts/player.gd` | Player movement and placeholder low-poly body + paddle swing |
+| `scripts/player.gd` | Player movement, procedural rig driving the character model, paddle swing |
+| `scripts/roster.gd`, `profile.gd` | Characters, venues, career rounds; saved settings, team, progress, stats |
+| `scripts/sfx.gd` | Sound effects |
 | `scripts/match_score.gd` | Padel scoring |
 | `scripts/hud.gd`, `touch_*.gd` | Touch HUD, iOS safe area aware |
 | `scripts/online.gd`, `relay_peer.gd` | Online play: matchmaking and the relay transport |
@@ -130,6 +141,8 @@ Pass these after `--` on the command line:
 godot --headless --path . --fixed-fps 60 -- --autoplay --quit-after=600   # AI vs AI soak test + rally stats
 godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot taps HIT as you
 --mode=quick|set|match|practice                                           # skip the menu
+--career=club|regional|national|world  --daily                             # career match / daily challenge
+--screen=career|team|settings|stats|training                              # open a menu screen
 --relay=ws://127.0.0.1:8080 --online-quick                                # online test (run two copies)
 --drill=ground|aim|slice|glass|volley|smash|mix                           # start a training drill
 godot --path . -s tools/pose_test.gd -- out                               # render the player rig in poses

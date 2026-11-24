@@ -60,6 +60,9 @@ var _back_glass: Array[MeshInstance3D] = [null, null]
 var _back_frame: Array[Node3D] = [null, null]
 var _glass: Material
 var _near_glass: Material
+var _turf: StandardMaterial3D
+var _apron: StandardMaterial3D
+var _lamps: Array[OmniLight3D] = []
 
 
 func _ready() -> void:
@@ -99,9 +102,11 @@ func _box(size: Vector3, pos: Vector3, mat: Material, shadows := true) -> MeshIn
 
 
 func _build_floor() -> void:
-	_box(Vector3(18.0, 0.02, 30.0), Vector3(0, -0.02, 0), _mat(APRON))
+	_apron = _mat(APRON)
+	_box(Vector3(18.0, 0.02, 30.0), Vector3(0, -0.02, 0), _apron)
 	var turf := _mat(COURT_BLUE)
 	turf.roughness = 1.0
+	_turf = turf
 	_box(Vector3(HALF_W * 2.0, 0.02, HALF_L * 2.0), Vector3(0, -0.005, 0), turf)
 
 
@@ -193,6 +198,16 @@ func _build_lights() -> void:
 			l.light_energy = 0.28
 			l.light_color = Color("fff4d2")
 			add_child(l)
+			_lamps.append(l)
+
+
+## A career venue's look: court and surround colours, floodlight strength.
+func apply_venue(v: Dictionary) -> void:
+	_turf.albedo_color = v.court
+	_apron.albedo_color = v.apron
+	for l in _lamps:
+		l.light_energy = v.lamps
+		l.visible = v.lamps > 0.0
 
 
 ## Small tiling diamond-mesh texture used for the fence and net.

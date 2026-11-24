@@ -14,19 +14,24 @@ signal online_join(code: String)
 signal online_closed
 signal play_ai_instead
 signal training_chosen(drill: String)
+signal career_chosen(venue: String)
+signal daily_chosen
+signal team_changed
+signal settings_changed
 
 const LIME := Color("c6f432")
 const INK := Color("0b1220")
 const PANEL := Color(0.035, 0.06, 0.11, 0.82)
 const MUTED := Color("a9b4c6")
 
-## Menu entries: id, title, detail.
+## Menu entries: id, title, detail. The first two are highlighted.
 const MODES := [
-	["training", "Training", "Learn every shot: drills with a ball machine"],
+	["career", "Career", "Win tournaments, unlock new courts"],
 	["quick", "Quick match", "One set, first to 4 games · about 5 minutes"],
-	["set", "One set", "First to 6 games, tie-break at 6-6"],
-	["match", "Full match", "Best of three sets"],
+	["training", "Training", "Learn every shot: drills with a ball machine"],
+	["daily", "Daily challenge", "Hit the moving goal on the back glass"],
 	["online", "Play online", "Quick match, or a private game with a friend"],
+	["longer", "Longer match", "One set, or best of three"],
 ]
 
 ## Training drills: id, name. Details (tips, goals) live in main.gd.
@@ -67,7 +72,18 @@ var _callout_t := 0.0
 var _flash_t := 0.0
 
 var _menu: Control
-var _golden: CheckButton
+var _menu_buttons := {}        # mode id -> Button (subtitles get refreshed)
+var _pills := {}               # bottom-row pills on the menu
+var _screens: Array[Control] = []   # full-screen overlays (sized in _layout)
+var _career: Control
+var _career_list: VBoxContainer
+var _team: Control
+var _team_box: VBoxContainer
+var _settings: Control
+var _settings_box: VBoxContainer
+var _stats: Control
+var _stats_grid: GridContainer
+var _longer: Control
 var _pause_menu: Control
 var _quit_btn: Button
 var _names: Array[Label] = []
@@ -150,6 +166,8 @@ func _ready() -> void:
 	_build_menu()
 	_build_online()
 	_build_training()
+	_screens.append(_online)
+	_screens.append(_training)
 	_build_pause_menu()
 
 	get_viewport().size_changed.connect(_layout)
@@ -169,8 +187,10 @@ func _process(delta: float) -> void:
 
 func show_menu(on: bool) -> void:
 	_menu.visible = on
-	_online.visible = false
-	_training.visible = false
+	for sc in _screens:
+		sc.visible = false
+	if on:
+		refresh_menu()
 	controls.visible = not on
 	_score_panel.visible = not on
 	_rally_panel.visible = not on
@@ -302,7 +322,7 @@ func set_rally_text(text: String) -> void:
 	_rally_label.text = text
 	if is_instance_valid(safe):
 		_rally_panel.reset_size()
-		_rally_panel.position = Vector2(safe.size.x - _rally_panel.size.x, 0)
+		_rally_panel.position = Vector2(0.0 if Profile.left_handed() else safe.size.x - _rally_panel.size.x, 0)
 
 
 func show_message(text: String, seconds := 1.6) -> void:
@@ -366,7 +386,7 @@ func _button(text: String, size: int, bg: Color, fg: Color) -> Button:
 	b.text = text
 	b.focus_mode = Control.FOCUS_NONE
 	b.add_theme_font_size_override("font_size", size)
-	for st in ["normal", "hover", "pressed", "focus"]:
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = bg.lightened(0.12) if st == "pressed" else bg
 		sb.set_corner_radius_all(14)
@@ -375,8 +395,9 @@ func _button(text: String, size: int, bg: Color, fg: Color) -> Button:
 		sb.content_margin_top = 8
 		sb.content_margin_bottom = 8
 		b.add_theme_stylebox_override(st, sb)
-	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color"]:
 		b.add_theme_color_override(c, fg)
+	b.pressed.connect(func() -> void: Sfx.play_ui())
 	return b
 
 
@@ -438,43 +459,329 @@ func _build_menu() -> void:
 	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_menu.add_child(centre)
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 8)
+	col.add_theme_constant_override("separation", 7)
 	centre.add_child(col)
-	var title := _label("OFF THE GLASS", 50, Color.WHITE)
+	var title := _label("OFF THE GLASS", 42, Color.WHITE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(title)
-	var sub := _label("Padel doubles · glass walls · golden point", 15, MUTED)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(sub)
-	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(0, 6)
-	col.add_child(gap)
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
+	grid.add_theme_constant_override("v_separation", 8)
 	col.add_child(grid)
 	for m in MODES:
-		var b := _button("%s\n%s" % [m[1], m[2]], 15, LIME if m[0] in ["training", "quick"] else Color(1, 1, 1, 0.94), INK)
-		b.custom_minimum_size = Vector2(330, 64)
 		var id: String = m[0]
-		if id == "online":
-			b.pressed.connect(func() -> void: show_online(true))
-		elif id == "training":
-			b.pressed.connect(func() -> void: show_training(true, _training_info))
-		else:
-			b.pressed.connect(func() -> void: mode_chosen.emit(id, _golden.button_pressed))
+		var b := _button("%s\n%s" % [m[1], m[2]], 15, LIME if id in ["career", "quick"] else Color(1, 1, 1, 0.94), INK)
+		b.custom_minimum_size = Vector2(330, 58)
+		match id:
+			"online": b.pressed.connect(func() -> void: show_online(true))
+			"training": b.pressed.connect(func() -> void: show_training(true, _training_info))
+			"career": b.pressed.connect(func() -> void: show_career(true))
+			"daily": b.pressed.connect(func() -> void: daily_chosen.emit())
+			"longer": b.pressed.connect(func() -> void: _open(_longer))
+			_: b.pressed.connect(func() -> void: mode_chosen.emit(id, Profile.golden_point()))
+		_menu_buttons[id] = b
 		grid.add_child(b)
-	_golden = CheckButton.new()
-	_golden.text = "Golden point at deuce"
-	_golden.button_pressed = true
-	_golden.focus_mode = Control.FOCUS_NONE
-	_golden.add_theme_font_size_override("font_size", 15)
-	_golden.add_theme_color_override("font_color", Color.WHITE)
-	_golden.add_theme_color_override("font_pressed_color", Color.WHITE)
-	_golden.add_theme_color_override("font_hover_color", Color.WHITE)
-	_golden.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	col.add_child(_golden)
+	# bottom row: team, AI level, court, stats, settings
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	col.add_child(row)
+	for id in ["team", "ai", "court", "stats", "settings"]:
+		var pb := _button("", 14, Color(1, 1, 1, 0.16), Color.WHITE)
+		pb.custom_minimum_size = Vector2(0, 40)
+		_pills[id] = pb
+		row.add_child(pb)
+	_pills.team.pressed.connect(func() -> void: show_team(true))
+	_pills.stats.pressed.connect(func() -> void: show_stats(true))
+	_pills.settings.pressed.connect(func() -> void: show_settings(true))
+	_pills.ai.pressed.connect(func() -> void:
+		Profile.set_v("settings", "difficulty", (Profile.difficulty() + 1) % 3)
+		Profile.save()
+		refresh_menu()
+		settings_changed.emit())
+	_pills.court.pressed.connect(func() -> void:
+		var open: Array = []
+		for i in Roster.VENUES.size():
+			if Profile.venue_unlocked(i):
+				open.append(Roster.VENUES[i].id)
+		var at := open.find(Profile.get_v("settings", "court", "club"))
+		Profile.set_v("settings", "court", open[(at + 1) % open.size()])
+		Profile.save()
+		refresh_menu()
+		settings_changed.emit())
+	_build_longer()
+	_build_career()
+	_build_team()
+	_build_settings()
+	_build_stats()
+
+
+## Menu labels that depend on saved state (team, AI level, court, today's best).
+func refresh_menu() -> void:
+	if _pills.is_empty():
+		return
+	var lu := Roster.lineup(Profile.character(), Profile.partner())
+	_pills.team.text = "Team: %s & %s" % [Roster.character(lu[0]).name, Roster.character(lu[1]).name]
+	_pills.ai.text = "AI: %s" % Profile.DIFFICULTIES[Profile.difficulty()]
+	_pills.court.text = "Court: %s" % Roster.venue(Profile.get_v("settings", "court", "club")).name
+	_pills.stats.text = "Stats"
+	_pills.settings.text = "Settings"
+	var best := Profile.daily_best()
+	_menu_buttons.daily.text = "Daily challenge\n%s" % ("Today's best: %d goals" % best if best > 0 else "Hit the moving goal on the back glass")
+	var next := ""
+	for v in Roster.VENUES:
+		if not Profile.career_won(v.id):
+			next = "%s · %s" % [v.name, Roster.ROUNDS[Profile.career_round(v.id)]]
+			break
+	_menu_buttons.career.text = "Career\n%s" % (next if next != "" else "World champions! Defend your titles")
+
+
+# --- full-screen overlays --------------------------------------------------------
+
+## A full-screen panel with a title row; returns [root, column].
+func _screen(title: String, subtitle := "") -> Array:
+	var root := ColorRect.new()
+	root.color = Color(0.03, 0.06, 0.1, 0.9)
+	root.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.visible = false
+	add_child(root)
+	_screens.append(root)
+	var centre := CenterContainer.new()
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(centre)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	centre.add_child(col)
+	var t := _label(title, 30, Color.WHITE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(t)
+	if subtitle != "":
+		var st := _label(subtitle, 14, MUTED)
+		st.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		col.add_child(st)
+	return [root, col]
+
+
+func _back_button(screen: Control, label := "Back") -> Button:
+	var back := _button(label, 16, Color(1, 1, 1, 0.2), Color.WHITE)
+	back.custom_minimum_size = Vector2(150, 42)
+	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	back.pressed.connect(func() -> void:
+		screen.visible = false
+		_menu.visible = true
+		refresh_menu())
+	return back
+
+
+func _open(screen: Control) -> void:
+	_menu.visible = false
+	screen.visible = true
+
+
+func _build_longer() -> void:
+	var sc := _screen("Longer match", "Golden point and AI level are on the menu and in Settings")
+	_longer = sc[0]
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	sc[1].add_child(row)
+	for m in [["set", "One set\nFirst to 6, tie-break at 6-6"], ["match", "Full match\nBest of three sets"]]:
+		var id: String = m[0]
+		var b := _button(m[1], 16, Color(1, 1, 1, 0.94), INK)
+		b.custom_minimum_size = Vector2(260, 64)
+		b.pressed.connect(func() -> void:
+			_longer.visible = false
+			mode_chosen.emit(id, Profile.golden_point()))
+		row.add_child(b)
+	sc[1].add_child(_back_button(_longer))
+
+
+func _build_career() -> void:
+	var sc := _screen("Career", "Win three rounds to take each title and unlock the next court")
+	_career = sc[0]
+	_career_list = VBoxContainer.new()
+	_career_list.add_theme_constant_override("separation", 7)
+	sc[1].add_child(_career_list)
+	sc[1].add_child(_back_button(_career))
+
+
+func show_career(on: bool) -> void:
+	if not on:
+		_career.visible = false
+		return
+	for c in _career_list.get_children():
+		c.queue_free()
+	for i in Roster.VENUES.size():
+		var v: Dictionary = Roster.VENUES[i]
+		var id: String = v.id
+		var unlocked := Profile.venue_unlocked(i)
+		var rnd := Profile.career_round(id)
+		var status := ""
+		if not unlocked:
+			status = "Locked · win %s first" % Roster.VENUES[i - 1].name
+		elif Profile.career_won(id) and rnd == 0:
+			status = "CHAMPIONS · play it again"
+		else:
+			status = "Next: %s%s" % [Roster.ROUNDS[rnd], "  (rounds won: %d)" % rnd if rnd > 0 else ""]
+		var b := _button("%s  ·  %s\n%s" % [v.name, v.sub, status], 15,
+			(v.court as Color).lightened(0.08) if unlocked else Color(1, 1, 1, 0.12),
+			Color.WHITE if unlocked else MUTED)
+		b.custom_minimum_size = Vector2(560, 52)
+		b.disabled = not unlocked
+		b.pressed.connect(func() -> void:
+			_career.visible = false
+			career_chosen.emit(id))
+		_career_list.add_child(b)
+	_open(_career)
+
+
+func _build_team() -> void:
+	var sc := _screen("Your team", "Pick who you play as, then your partner. The other two are your rivals.")
+	_team = sc[0]
+	_team_box = VBoxContainer.new()
+	_team_box.add_theme_constant_override("separation", 6)
+	sc[1].add_child(_team_box)
+	sc[1].add_child(_back_button(_team, "Done"))
+
+
+func show_team(on: bool) -> void:
+	if not on:
+		_team.visible = false
+		return
+	for c in _team_box.get_children():
+		c.queue_free()
+	var lu := Roster.lineup(Profile.character(), Profile.partner())
+	for pass_i in 2:
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 8)
+		var head := _label("You play as" if pass_i == 0 else "Partner", 15, MUTED)
+		head.custom_minimum_size = Vector2(96, 0)
+		row.add_child(head)
+		for ch in Roster.CHARACTERS:
+			var cid: String = ch.id
+			if pass_i == 1 and cid == lu[0]:
+				continue
+			var picked: bool = cid == lu[pass_i]
+			var b := _button("%s\n%s" % [ch.name, ch.style], 15, LIME if picked else Color(1, 1, 1, 0.94), INK)
+			b.custom_minimum_size = Vector2(130, 52)
+			b.pressed.connect(func() -> void:
+				if pass_i == 0:
+					Profile.set_v("team", "me", cid)
+					if Profile.partner() == cid:
+						Profile.set_v("team", "partner", lu[0])
+				else:
+					Profile.set_v("team", "partner", cid)
+				Profile.save()
+				team_changed.emit()
+				show_team(true))
+			row.add_child(b)
+		_team_box.add_child(row)
+	var me := Roster.character(lu[0])
+	var mate := Roster.character(lu[1])
+	var info := _label("%s: %s\n%s: %s\nRivals: %s & %s" % [me.name, me.desc, mate.name, mate.desc,
+		Roster.character(lu[2]).name, Roster.character(lu[3]).name], 14, Color.WHITE)
+	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_team_box.add_child(info)
+	_open(_team)
+
+
+func _build_settings() -> void:
+	var sc := _screen("Settings")
+	_settings = sc[0]
+	_settings_box = VBoxContainer.new()
+	_settings_box.add_theme_constant_override("separation", 6)
+	sc[1].add_child(_settings_box)
+	sc[1].add_child(_back_button(_settings, "Done"))
+
+
+const SETTINGS := [
+	["sound", "Sound", ["Off", "On"]],
+	["haptics", "Vibration", ["Off", "On"]],
+	["left_handed", "Controls", ["Right-handed", "Left-handed"]],
+	["button_size", "Button size", ["Small", "Medium", "Large"]],
+	["difficulty", "AI level", ["Easy", "Normal", "Hard"]],
+	["golden_point", "Golden point", ["Off", "On"]],
+]
+
+
+func show_settings(on: bool) -> void:
+	if not on:
+		_settings.visible = false
+		return
+	for c in _settings_box.get_children():
+		c.queue_free()
+	var current := {"sound": int(Profile.sound()), "haptics": int(Profile.haptics()),
+		"left_handed": int(Profile.left_handed()), "button_size": int(Profile.get_v("settings", "button_size", 1)),
+		"difficulty": Profile.difficulty(), "golden_point": int(Profile.golden_point())}
+	for st in SETTINGS:
+		var key: String = st[0]
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 6)
+		var l := _label(st[1], 16, Color.WHITE)
+		l.custom_minimum_size = Vector2(140, 0)
+		row.add_child(l)
+		var opts: Array = st[2]
+		for i in opts.size():
+			var picked: bool = current[key] == i
+			var b := _button(opts[i], 14, LIME if picked else Color(1, 1, 1, 0.16), INK if picked else Color.WHITE)
+			b.custom_minimum_size = Vector2((366.0 - 6.0 * (opts.size() - 1)) / opts.size(), 36)
+			b.pressed.connect(func() -> void:
+				var v: Variant = i if key in ["button_size", "difficulty"] else bool(i)
+				Profile.set_v("settings", key, v)
+				Profile.save()
+				settings_changed.emit()
+				_layout()
+				show_settings(true))
+			row.add_child(b)
+		_settings_box.add_child(row)
+	_open(_settings)
+
+
+func _build_stats() -> void:
+	var sc := _screen("Your stats")
+	_stats = sc[0]
+	_stats_grid = GridContainer.new()
+	_stats_grid.columns = 4
+	_stats_grid.add_theme_constant_override("h_separation", 22)
+	_stats_grid.add_theme_constant_override("v_separation", 6)
+	sc[1].add_child(_stats_grid)
+	sc[1].add_child(_back_button(_stats))
+
+
+func show_stats(on: bool) -> void:
+	if not on:
+		_stats.visible = false
+		return
+	for c in _stats_grid.get_children():
+		c.queue_free()
+	var played := Profile.stat("matches")
+	var won := Profile.stat("wins")
+	var pts := Profile.stat("points_played")
+	var drills := 0
+	for k in _training_info:
+		if str(_training_info[k]).begins_with("✓"):
+			drills += 1
+	var trophies := 0
+	for v in Roster.VENUES:
+		trophies += 1 if Profile.career_won(v.id) else 0
+	var rows := [
+		["Matches played", str(played)], ["Matches won", "%d%s" % [won, "  (%d%%)" % roundi(100.0 * won / played) if played > 0 else ""]],
+		["Points won", "%d of %d" % [Profile.stat("points_won"), pts]], ["Longest rally", "%d shots" % Profile.stat("longest_rally")],
+		["Power smashes", str(Profile.stat("power_smashes"))], ["Bajadas", str(Profile.stat("bajadas"))],
+		["Perfect hits", str(Profile.stat("perfect"))], ["Slices", str(Profile.stat("slices"))],
+		["Career titles", "%d of %d" % [trophies, Roster.VENUES.size()]], ["Drills complete", "%d of %d" % [drills, TRAINING.size() - 1]],
+		["Daily best", "%d goals" % Profile.stat("daily_best")], ["Online wins", "%d of %d" % [Profile.stat("online_wins"), Profile.stat("online_matches")]],
+	]
+	for r in rows:
+		var k := _label(r[0], 15, MUTED)
+		var v := _label(r[1], 17, Color.WHITE)
+		v.custom_minimum_size = Vector2(120, 0)
+		_stats_grid.add_child(k)
+		_stats_grid.add_child(v)
+	_open(_stats)
 
 
 func _build_pause_menu() -> void:
@@ -555,7 +862,7 @@ func _build_online() -> void:
 		var b := _button(h[1], 16, Color(1, 1, 1, 0.94), INK)
 		b.custom_minimum_size = Vector2(110, 44)
 		var id: String = h[0]
-		b.pressed.connect(func() -> void: online_create.emit(id, _golden.button_pressed))
+		b.pressed.connect(func() -> void: online_create.emit(id, Profile.golden_point()))
 		host_row.add_child(b)
 	col.add_child(host_row)
 
@@ -607,10 +914,9 @@ func _layout() -> void:
 	_menu.size = vp
 	_pause_menu.position = Vector2.ZERO
 	_pause_menu.size = vp
-	_training.position = Vector2.ZERO
-	_training.size = vp
-	_online.position = Vector2.ZERO
-	_online.size = vp
+	for sc in _screens:
+		sc.position = Vector2.ZERO
+		sc.size = vp
 	var rect := Rect2(Vector2.ZERO, vp)
 	if OS.has_feature("mobile"):
 		var sa := DisplayServer.get_display_safe_area()
@@ -625,20 +931,26 @@ func _layout() -> void:
 	controls.size = rect.size
 	var w := rect.size.x
 	var h := rect.size.y
+	var lefty := Profile.left_handed()
 
-	pause_btn.position = Vector2(0, 0)
 	_score_panel.reset_size()
 	_score_panel.position = Vector2((w - _score_panel.size.x) * 0.5, 0)
 	_rally_panel.reset_size()
-	_rally_panel.position = Vector2(w - _rally_panel.size.x, 0)
+	_rally_panel.position = Vector2(0.0 if lefty else w - _rally_panel.size.x, 0)
 
-	joystick.position = Vector2(0, h * 0.4)
+	# left-handed: stick on the right, buttons on the left (mirror every x)
+	var k := Profile.button_scale()
 	joystick.size = Vector2(w * 0.42, h * 0.6)
-	joystick.rest_centre = Vector2(80, joystick.size.y - 80)
-
-	_place(hit_btn, Vector2(w - 70, h - 70), 72)
-	_place(lob_btn, Vector2(w - 185, h - 38), 48)
-	_place(smash_btn, Vector2(w - 60, h - 195), 48)
+	joystick.position = Vector2(w - joystick.size.x if lefty else 0.0, h * 0.4)
+	joystick.rest_centre = Vector2(joystick.size.x - 80 if lefty else 80.0, joystick.size.y - 80)
+	var mx := func(x: float) -> float: return w - x if lefty else x
+	hit_btn.radius = 50 * k
+	lob_btn.radius = 32 * k
+	smash_btn.radius = 32 * k
+	_place(hit_btn, Vector2(mx.call(w - 70 * k), h - 70 * k), 72 * k)
+	_place(lob_btn, Vector2(mx.call(w - 185 * k), h - 38 * k), 48 * k)
+	_place(smash_btn, Vector2(mx.call(w - 60 * k), h - 195 * k), 48 * k)
+	pause_btn.position = Vector2(w - pause_btn.size.x if lefty else 0.0, 0)
 	_layout_message()
 
 

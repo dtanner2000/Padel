@@ -12,6 +12,9 @@ extends Node3D
 ##   --mash            a bot taps HIT for you (tests the human code path)
 ##   --mode=ID         skip the menu: quick | set | match | practice
 ##   --drill=ID        start a training drill: ground | aim | slice | glass | volley | smash | mix
+##   --daily           start today's daily challenge
+##   --career=VENUE    start a career match at a venue (club | regional | national | world)
+##   --screen=NAME     open a menu screen: career | team | settings | stats | training
 ##   --relay=URL       relay server to use (default Online.RELAY_URL)
 ##   --online-quick    go straight into an online quick match
 ##   --online-create=L create a private game (quick | set | match), prints the code
@@ -45,6 +48,7 @@ const DRILL_INFO := {
 		"tip": "Every hit charges SMASH. When it glows and the ball is high,\ntap SMASH to send it out of the court."},
 	"mix": {"name": "Free practice", "goal": 0, "z": 7.4,
 		"tip": "Everything mixed. How long a streak can you build?"},
+	"challenge": {"name": "Daily challenge", "goal": 0, "z": 7.6, "tip": ""},
 }
 const MIX_ORDER := ["ground", "glass", "slice", "volley", "smash", "aim"]
 const TRAINING_SAVE := "user://training.cfg"
@@ -118,12 +122,32 @@ var target_sign := 1.0
 var target_marker: MeshInstance3D
 var last_hit_volley := false
 
+# team, venue, career, daily challenge
+var lineup: Array = []              # character ids [you, partner, rival, rival]
+var venue: Dictionary = {}
+var career_venue := ""              # venue id while playing a career match
+var career_round := 0
+var challenge := false              # the daily back-glass target challenge
+var ch_goals := 0
+var ch_lives := 3
+var ch_best := 0
+var ch_t := 0.0
+var ch_rng := RandomNumberGenerator.new()
+var ch_params := {}
+var ch_size := Vector2(4.2, 2.4)
+var goal_frame: Node3D
+var sfx: Sfx
+var _last_move := Vector3.ZERO
+var _squeak_cd := 0.0
+var _over_at := 0.0               # when the match/challenge ended (taps ignored briefly)
+
 # versus
 var net_role := ""          # "" offline | "host" | "client"
 var remote_peer := 0
 var remote_player: Player = null
 var _snap: Array = []
 var _snap_age := 0.0
+var _client_prev_vel := Vector3.ZERO
 var _seen_swings := [0, 0, 0, 0]
 var opp_label := "OPPONENT"   # "FRIEND" in a private game
 var rtt_ms := -1
@@ -158,6 +182,15 @@ func _ready() -> void:
 	ball.wall_hit.connect(_on_wall)
 	ball.net_hit.connect(func(_p: Vector3) -> void: _refresh_prediction())
 	ball.out_of_court.connect(_on_out)
+	sfx = Sfx.new()
+	add_child(sfx)
+	ball.floor_bounce.connect(func(pos: Vector3) -> void:
+		sfx.at("floor", pos, clampf(ball.sim.vel.length() * 0.8 - 14.0, -16.0, -4.0)))
+	ball.wall_hit.connect(func(pos: Vector3, surface: String) -> void:
+		var loud := clampf(ball.sim.vel.length() * 0.9 - 12.0, -12.0, 2.0)
+		sfx.at("glass" if surface == "glass" else "mesh", pos, loud))
+	ball.net_hit.connect(func(pos: Vector3) -> void: sfx.at("net", pos, -4.0))
+	lineup = Roster.lineup(Profile.character(), Profile.partner())
 	_spawn_players()
 	_make_ring()
 	_make_aim_marker()
@@ -173,6 +206,17 @@ func _ready() -> void:
 	hud.online_join.connect(_online_join)
 	hud.online_closed.connect(func() -> void: online.close())
 	hud.training_chosen.connect(_start_training)
+	hud.career_chosen.connect(_start_career)
+	hud.daily_chosen.connect(_start_daily)
+	hud.team_changed.connect(func() -> void:
+		lineup = Roster.lineup(Profile.character(), Profile.partner())
+		_apply_lineup()
+		hud.set_team_names(_team_name(0, 0), _team_name(1, 0)))
+	hud.settings_changed.connect(func() -> void:
+		sfx.apply_settings()
+		if mode == "menu":
+			_apply_venue(Profile.get_v("settings", "court", "club")))
+	_make_goal_frame()
 	training.load(TRAINING_SAVE)
 	hud.set_training_info(_training_summary())
 	_make_target_marker()
@@ -212,6 +256,10 @@ func _ready() -> void:
 			_online_join(start_online.get_slice(":", 1))
 	elif start_mode.begins_with("drill:"):
 		_start_training(start_mode.get_slice(":", 1))
+	elif start_mode == "daily":
+		_start_daily()
+	elif start_mode.begins_with("career:"):
+		_start_career(start_mode.get_slice(":", 1))
 	elif start_mode != "":
 		_on_mode_chosen(start_mode, true)
 	elif autoplay or mash:
@@ -220,6 +268,14 @@ func _ready() -> void:
 		_go_menu()
 		if "--show-training" in OS.get_cmdline_user_args():
 			hud.show_training(true, _training_summary())
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("--screen="):
+				match a.get_slice("=", 1):
+					"career": hud.show_career(true)
+					"team": hud.show_team(true)
+					"settings": hud.show_settings(true)
+					"stats": hud.show_stats(true)
+					"training": hud.show_training(true, _training_summary())
 
 
 func _parse_args() -> void:
@@ -242,6 +298,10 @@ func _parse_args() -> void:
 			start_mode = a.get_slice("=", 1)
 		elif a.begins_with("--drill="):
 			start_mode = "drill:" + a.get_slice("=", 1)
+		elif a == "--daily":
+			start_mode = "daily"
+		elif a.begins_with("--career="):
+			start_mode = "career:" + a.get_slice("=", 1)
 		elif a.begins_with("--screenshot="):
 			var v := a.get_slice("=", 1)
 			shot_path = v.get_slice("@", 0)
@@ -265,9 +325,14 @@ func _setup_input() -> void:
 			InputMap.action_add_event(action, ev)
 
 
+var _env: Environment
+var _sun: DirectionalLight3D
+
+
 func _setup_environment() -> void:
 	var we := WorldEnvironment.new()
 	var e := Environment.new()
+	_env = e
 	e.background_mode = Environment.BG_COLOR
 	e.background_color = Color("0c1a2e")
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -277,6 +342,7 @@ func _setup_environment() -> void:
 	we.environment = e
 	add_child(we)
 	var sun := DirectionalLight3D.new()
+	_sun = sun
 	sun.rotation_degrees = Vector3(-62, 28, 0)
 	sun.light_energy = 0.85
 	sun.shadow_enabled = true
@@ -294,27 +360,58 @@ func _setup_environment() -> void:
 func _spawn_players() -> void:
 	var white := Color("eef1f6")
 	var orange := Color("f28c28")
-	var defs := [
-		[0, "YOU", -2.5, orange, Color("e3b48c"), Color("3a2a20"), true, 0.75],
-		[0, "ANA", 2.5, orange, Color("d9a47c"), Color("5a3a26"), false, 0.74],
-		[1, "MARCO", -2.5, white, Color("e0b48e"), Color("3b2b22"), false, 0.68],
-		[1, "LEO", 2.5, white, Color("c9966e"), Color("1e1a18"), false, 0.7],
-	]
-	for d in defs:
-		var p := Player.new().setup(d[0], d[1], d[2], d[3], d[4], d[5], d[6])
-		p.skill = d[7]
+	var slots := [[0, -2.5, orange, true], [0, 2.5, orange, false], [1, -2.5, white, false], [1, 2.5, white, false]]
+	for i in 4:
+		var c := Roster.character(lineup[i])
+		var sl: Array = slots[i]
+		var p := Player.new().setup(sl[0], c.name, sl[1], sl[2], c.skin, c.hair, sl[3])
 		add_child(p)
 		players.append(p)
-	# reviews of the Red Bull game called its movement "clunky and sluggish":
-	# a person's player starts, stops and turns almost instantly
-	players[0].accel = 48.0
-	players[0].speed = 5.0
-	# generated characters (Higgsfield -> Meshy); any that are missing keep the procedural body
-	var models := ["you", "ana", "marco", "leo"]   # same order as defs above
-	for i in players.size():
-		var path := "res://assets/characters/%s.glb" % models[i]
+	_apply_lineup()
+
+
+## Characters into the four slots: names, models, styles, base pace.
+func _apply_lineup() -> void:
+	for i in 4:
+		var c := Roster.character(lineup[i])
+		var p := players[i]
+		p.set_display_name(c.name)
+		p.style = c.style
+		# reviews of the Red Bull game called its movement "clunky and sluggish":
+		# a person's player starts, stops and turns almost instantly
+		p.accel = 48.0 if i == 0 else 20.0
+		# generated characters (Higgsfield -> Meshy); a missing one keeps the procedural body
+		var path := "res://assets/characters/%s.glb" % ("you" if c.id == "dani" else c.id)
 		if ResourceLoader.exists(path):
-			players[i].use_model(load(path))
+			p.use_model(load(path))
+	_apply_styles()
+
+
+## Small style edges (offline only, so online stays even): Speed is quicker
+## about the court; the others act in _ai_hit, _do_hit and _timing_quality.
+func _apply_styles() -> void:
+	for p in players:
+		var base := 5.0 if p == players[0] or p == remote_player else 4.7
+		if net_role == "" and p.style == "Speed":
+			base *= 1.08
+		elif net_role == "" and p.style == "All-rounder":
+			base *= 1.03
+		p.speed = base
+
+
+func _style(p: Player) -> String:
+	return p.style if net_role == "" else ""
+
+
+## Court colours, sky and lights for a venue.
+func _apply_venue(id: String) -> void:
+	venue = Roster.venue(id)
+	court.apply_venue(venue)
+	_env.background_color = venue.bg
+	_env.ambient_light_color = venue.ambient
+	_env.ambient_light_energy = venue.ambient_e
+	_sun.light_energy = venue.sun
+	sfx.crowd_level = venue.crowd
 
 
 func _make_aim_marker() -> void:
@@ -438,11 +535,13 @@ func _pad_for(p: Player) -> Pad:
 
 
 func _team_name(team: int, viewer_team: int) -> String:
+	var mate0 := players[1].display_name
+	var mate1 := players[3].display_name
 	if net_role == "":
-		return "YOU · ANA" if team == 0 else "RIVALS"
+		return "YOU · %s" % mate0 if team == 0 else "%s · %s" % [players[2].display_name, mate1]
 	if team == viewer_team:
-		return "YOU · ANA" if team == 0 else "YOU · LEO"
-	return ("%s · ANA" if team == 0 else "%s · LEO") % opp_label
+		return "YOU · %s" % (mate0 if team == 0 else mate1)
+	return "%s · %s" % [opp_label, mate0 if team == 0 else mate1]
 
 
 # --- modes ----------------------------------------------------------------------
@@ -451,6 +550,13 @@ func _go_menu() -> void:
 	mode = "menu"
 	attract = true
 	practice = false
+	challenge = false
+	career_venue = ""
+	goal_frame.visible = false
+	machine.position = Vector3(0, 0, -9.3)
+	Profile.save()
+	_apply_venue(Profile.get_v("settings", "court", "club"))
+	_apply_ai_levels(0.7, [0.68, 0.7])
 	score = MatchScore.create(6, 2, true)
 	faults = 0
 	for p in players:
@@ -474,7 +580,10 @@ func _leave_to_menu() -> void:
 func _on_mode_chosen(id: String, golden: bool) -> void:
 	mode = id
 	attract = false
-	practice = id == "practice"
+	practice = id == "practice" or challenge
+	if career_venue == "" and not practice:
+		_apply_venue(Profile.get_v("settings", "court", "club"))
+		_apply_ai_levels(0.74, [0.68, 0.7])
 	match id:
 		"quick": score = MatchScore.create(4, 1, golden)
 		"set": score = MatchScore.create(6, 1, golden)
@@ -488,10 +597,205 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 		p.smash_charge = 0.0
 	target_marker.visible = false
 	machine.visible = practice
+	if not challenge:
+		goal_frame.visible = false
+		machine.position = Vector3(0, 0, -9.3)
 	hud.show_menu(false)
 	hud.set_practice(practice)
 	hud.set_team_names(_team_name(0, 0), _team_name(1, 0))
 	_start_point()
+
+
+## AI skill for this match: your partner, then the two rivals, shifted by the
+## AI level setting (Easy plays looser and reacts later, Hard is sharper).
+func _apply_ai_levels(partner: float, rivals: Array) -> void:
+	var off: float = [-0.13, 0.0, 0.1][Profile.difficulty()]
+	players[1].skill = clampf(partner + off * 0.3, 0.4, 0.95)
+	players[2].skill = clampf(rivals[0] + off, 0.35, 0.95)
+	players[3].skill = clampf(rivals[1] + off, 0.35, 0.95)
+	players[0].skill = 0.75
+
+
+# --- career ---------------------------------------------------------------------
+
+func _start_career(id: String) -> void:
+	career_venue = id
+	career_round = Profile.career_round(id)
+	var v := Roster.venue(id)
+	_apply_venue(id)
+	var r: float = v.rivals[career_round]
+	_apply_ai_levels(v.partner, [r - 0.02, r])
+	# early rounds are first to 4 games; the final is a full set
+	var games := 6 if career_round == Roster.ROUNDS.size() - 1 else 4
+	_on_mode_chosen("career", Profile.golden_point())
+	score = MatchScore.create(games, 1, Profile.golden_point())
+	_send_score()
+	hud.show_message("%s · %s\nvs %s & %s" % [v.name, Roster.ROUNDS[career_round], players[2].display_name, players[3].display_name], 3.0)
+
+
+## A career match just ended: move the run on, or end it.
+func _career_result(won: bool) -> String:
+	var v := Roster.venue(career_venue)
+	var rnd := career_round
+	if won and rnd == Roster.ROUNDS.size() - 1:
+		if not Profile.career_won(career_venue):
+			Profile.add_stat("titles")
+		Profile.set_v("career", career_venue + "_won", true)
+		Profile.set_v("career", career_venue + "_round", 0)
+		var i := Roster.VENUES.find(v)
+		var unlock: String = "\n%s unlocked!" % Roster.VENUES[i + 1].name if i + 1 < Roster.VENUES.size() and not Profile.venue_unlocked(i + 1) else ""
+		Profile.save()
+		return "CHAMPIONS!\n%s title is yours%s" % [v.name, unlock]
+	if won:
+		Profile.set_v("career", career_venue + "_round", rnd + 1)
+		Profile.save()
+		return "You win the %s!\nNext: the %s" % [Roster.ROUNDS[rnd].to_lower(), Roster.ROUNDS[rnd + 1].to_lower()]
+	Profile.set_v("career", career_venue + "_round", 0)
+	Profile.save()
+	return "Knocked out in the %s\nTry again from the quarter-final" % Roster.ROUNDS[rnd].to_lower()
+
+
+func _career_continue() -> void:
+	_go_menu()
+	hud.show_career(true)
+
+
+# --- daily challenge ----------------------------------------------------------------
+
+## Today's challenge: the ball machine feeds you, and a goal slides across the
+## rival back glass. Put the ball into it (on the full or after a bounce) to
+## score; each goal shrinks it and speeds it up. Three misses and it's over.
+## The goal's movement is seeded by the date, so everyone gets the same one.
+func _start_daily() -> void:
+	challenge = true
+	career_venue = ""
+	var today := Profile.today()
+	ch_rng.seed = hash("off-the-glass-" + today)
+	var patterns := ["sweep", "pingpong", "jumps", "figure"]
+	ch_params = {
+		"pattern": patterns[ch_rng.randi() % patterns.size()],
+		"speed": ch_rng.randf_range(0.55, 0.95),
+		"phase": ch_rng.randf_range(0.0, TAU),
+		"height": ch_rng.randf_range(1.0, 1.4),
+	}
+	ch_goals = 0
+	ch_lives = 3
+	ch_t = 0.0
+	ch_size = Vector2(4.2, 2.4)
+	ch_best = Profile.daily_best(today)
+	drill_id = "challenge"
+	_apply_venue(Profile.get_v("settings", "court", "club"))
+	_on_mode_chosen("practice", true)
+	machine.position = Vector3(-3.6, 0, -9.3)   # out of the goal's way
+	ball.place(machine.position + Vector3(0, 1.0, 0.4))
+	goal_frame.visible = true
+	_place_goal(0.0)
+	hud.show_message("Daily challenge · %s\nHit the moving goal on the back glass.\nIt shrinks every time you score. Three misses and you're out." % today, 4.0)
+	_challenge_hud()
+
+
+func _challenge_hud() -> void:
+	hud.set_rally_text("GOALS %d  ·  LIVES %d  ·  BEST %d" % [ch_goals, ch_lives, maxi(ch_best, ch_goals)])
+
+
+## Goal frame centre on the far back glass at challenge time t.
+func _goal_centre(t: float) -> Vector2:
+	var span := Court.HALF_W - ch_size.x * 0.5 - 0.15
+	var ph: float = ch_params.phase
+	var sp: float = ch_params.speed * (1.0 + ch_goals * 0.07)
+	var x := 0.0
+	var y: float = ch_params.height
+	match ch_params.pattern:
+		"pingpong":
+			x = span * (absf(fposmod(t * sp * 0.35 + ph, 2.0) - 1.0) * 2.0 - 1.0)
+		"jumps":
+			# holds still, then hops to a new spot every 2.6 s
+			var slot := int(t / 2.6 + ph)
+			x = span * sin(slot * 2.39996)
+		"figure":
+			x = span * sin(t * sp + ph)
+			y += 0.35 * sin(t * sp * 2.0 + ph)
+		_:
+			x = span * sin(t * sp + ph)
+	y = clampf(y, ch_size.y * 0.5 + 0.05, Court.GLASS_H - ch_size.y * 0.5 - 0.05)
+	return Vector2(x, y)
+
+
+func _place_goal(t: float) -> void:
+	var c := _goal_centre(t)
+	goal_frame.position = Vector3(c.x, c.y, -Court.HALF_L + 0.07)
+	goal_frame.scale = Vector3(ch_size.x, ch_size.y, 1.0)
+
+
+func _make_goal_frame() -> void:
+	goal_frame = Node3D.new()
+	var lime := StandardMaterial3D.new()
+	lime.albedo_color = Color("c6f432")
+	lime.emission_enabled = true
+	lime.emission = Color("c6f432")
+	lime.emission_energy_multiplier = 0.6
+	var fill := StandardMaterial3D.new()
+	fill.albedo_color = Color(0.78, 0.96, 0.2, 0.16)
+	fill.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fill.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	# a 1 x 1 goal mouth, scaled to size: posts, crossbar, line and a faint net
+	for part in [[Vector3(-0.5, 0, 0), Vector3(0.05, 1.0, 0.05)], [Vector3(0.5, 0, 0), Vector3(0.05, 1.0, 0.05)],
+			[Vector3(0, 0.5, 0), Vector3(1.05, 0.06, 0.05)], [Vector3(0, -0.5, 0), Vector3(1.05, 0.04, 0.05)]]:
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = part[1]
+		mi.mesh = bm
+		mi.position = part[0]
+		mi.material_override = lime
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		goal_frame.add_child(mi)
+	var back := MeshInstance3D.new()
+	var qm := QuadMesh.new()
+	qm.size = Vector2(1, 1)
+	back.mesh = qm
+	back.rotation.y = 0.0
+	back.material_override = fill
+	back.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	goal_frame.add_child(back)
+	goal_frame.visible = false
+	add_child(goal_frame)
+
+
+func _challenge_result(goal: bool, reason: String) -> void:
+	if state != State.RALLY:
+		return
+	state = State.POINT_OVER
+	state_timer = 1.0
+	ring.visible = false
+	aim_marker.visible = false
+	if goal:
+		ch_goals += 1
+		ch_size = Vector2(maxf(0.9, ch_size.x * 0.86), maxf(0.7, ch_size.y * 0.88))
+		sfx.ui("ding", -2.0)
+		hud.show_message("GOAL!  ×%d" % ch_goals, 0.9)
+		Profile.vibrate(40)
+	else:
+		ch_lives -= 1
+		sfx.ui("buzz", -6.0)
+		hud.show_message("%s\n%s" % [reason, "Last life!" if ch_lives == 1 else ("%d lives left" % ch_lives if ch_lives > 1 else "")], 1.2)
+	_challenge_hud()
+	if quit_after > 0.0:
+		print("[daily] %s %s goals=%d lives=%d" % ["GOAL" if goal else "miss", reason, ch_goals, ch_lives])
+	if ch_lives <= 0:
+		var today := Profile.today()
+		var best := maxi(ch_best, ch_goals)
+		var new_best := ch_goals > ch_best
+		Profile.set_v("daily", today, best)
+		Profile.max_stat("daily_best", ch_goals)
+		Profile.add_stat("daily_played")
+		Profile.save()
+		ch_best = best
+		state = State.MATCH_OVER
+		state_timer = 4.5
+		_over_at = elapsed
+		sfx.crowd(ch_goals >= 5)
+		hud.show_message("%d goal%s%s\nToday's best %d  ·  all-time best %d\nTap HIT to try again" % [
+			ch_goals, "" if ch_goals == 1 else "s", "  NEW BEST!" if new_best and ch_goals > 0 else "", best, Profile.stat("daily_best")], 4.5)
 
 
 ## The drill feeding the current ball (Free practice cycles through them).
@@ -502,6 +806,8 @@ func _drill() -> String:
 
 
 func _start_training(id: String) -> void:
+	challenge = false
+	career_venue = ""
 	drill_id = id
 	best_streak = int(training.get_value(id, "best", 0))
 	_on_mode_chosen("practice", true)
@@ -587,7 +893,7 @@ func _on_peer_connected(id: int) -> void:
 	remote_player.display_name = opp_label
 	remote_player.set_tag(opp_label)
 	remote_player.accel = 48.0
-	remote_player.speed = 5.0
+	_apply_styles()
 	pad_remote = Pad.new()
 	pad_remote.mirror = -1.0
 	hud.net_mode = true
@@ -612,11 +918,7 @@ func _end_versus(msg: String) -> void:
 	net_role = ""
 	remote_peer = 0
 	remote_player = null
-	var marco := players[FRIEND_INDEX]
-	marco.display_name = "MARCO"
-	marco.set_tag("MARCO")
-	marco.accel = 20.0
-	marco.speed = 4.7
+	_apply_lineup()
 	players[0].set_tag("")
 	hud.net_mode = false
 	_snap = []
@@ -664,6 +966,8 @@ func net_snapshot(data: Array) -> void:
 
 @rpc("authority", "call_remote", "reliable")
 func net_score(d: Dictionary) -> void:
+	if d.points != score.points or d.games != score.games:
+		sfx.crowd(d.games != score.games)
 	score.points = d.points
 	score.games = d.games
 	score.sets = d.sets
@@ -689,7 +993,7 @@ func net_callout(text: String) -> void:
 func net_feedback(text: String, ms: int) -> void:
 	if text != "":
 		hud.flash(text)
-	Input.vibrate_handheld(ms)
+	Profile.vibrate(ms)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -817,6 +1121,14 @@ func _client_tick(delta: float) -> void:
 	var swings: PackedInt32Array = _snap[6]
 	var kinds: PackedStringArray = _snap[11]
 	ball.shown_spin = _snap[12]
+	# the ball isn't simulated here: hear bounces from velocity flips between snapshots
+	if _client_prev_vel != Vector3.ZERO and bv != Vector3.ZERO and _snap_age == delta:
+		if _client_prev_vel.y < -1.0 and bv.y > 0.5 and bp.y < 0.4:
+			sfx.at("floor", bp, -8.0)
+		elif signf(_client_prev_vel.z) != signf(bv.z) and absf(bp.z) > Court.HALF_L - 1.0:
+			sfx.at("glass" if bp.y < Court.GLASS_H else "mesh", bp, -4.0)
+	if _snap_age == delta:
+		_client_prev_vel = bv
 	var k := 1.0 - exp(-18.0 * delta)
 	for i in 4:
 		var p := players[i]
@@ -825,6 +1137,8 @@ func _client_tick(delta: float) -> void:
 		if swings[i] != _seen_swings[i]:
 			_seen_swings[i] = swings[i]
 			p.swing(kinds[i])
+			var hard := kinds[i] in ["smash", "power_smash"]
+			sfx.at("smash" if hard else "paddle", bp, 0.0 if hard else -3.0)
 	ring.visible = _snap[7]
 	if ring.visible:
 		var rp: Vector3 = _snap[8]
@@ -880,7 +1194,10 @@ func _start_point() -> void:
 		state_timer = 2.2 if feeds == 0 else 1.0
 		if drill_id == "mix" and feeds > 0 and feeds % 4 == 0:
 			hud.show_message(DRILL_INFO[d].name, 1.2)
-		_training_hud()
+		if challenge:
+			_challenge_hud()
+		else:
+			_training_hud()
 		return
 
 	var srv := players[_server_index()]
@@ -937,6 +1254,7 @@ func _serve(srv: Player, aim: Vector2) -> void:
 	ball.velocity = Shot.solve(ball.sim.pos, to, 12.5, 0.3)
 	ball.live = true
 	srv.swing("serve")
+	sfx.at("paddle", ball.sim.pos, -3.0)
 	serve_in_play = true
 	last_hitter_team = srv.team
 	last_shot_kind = "serve"
@@ -961,6 +1279,7 @@ func _feed() -> void:
 		_:
 			ball.velocity = Shot.solve(from, Vector3(randf_range(-3.2, 3.2), r, randf_range(5.5, 7.6)), 12.0, 0.4)
 	ball.live = true
+	sfx.at("floor", from, -6.0, 0.7)
 	feeds += 1
 	serve_in_play = false
 	last_hitter_team = 1
@@ -1039,6 +1358,13 @@ func _point_text(team: int, reason: String, res: String, viewer: int) -> String:
 func _award(team: int, reason: String) -> void:
 	if state != State.RALLY:
 		return
+	if challenge:
+		var why: String = {"Double bounce": "Short of the glass", "Into the net": "Into the net",
+			"Out of the court!": "Over the wall", "Out": "Out"}.get(reason, reason)
+		if last_hitter_team == 1:
+			why = "Missed it"
+		_challenge_result(false, why)
+		return
 	if practice:
 		if team == 0 and reason == "Out of the court!":
 			_practice_judge(ball.sim.pos, false)
@@ -1054,11 +1380,35 @@ func _award(team: int, reason: String) -> void:
 	stats.rallies.append(rally_hits)
 	stats.reasons[reason] = stats.reasons.get(reason, 0) + 1
 	var res := score.point_won(team)
+	var big := rally_hits >= 8 or reason == "Out of the court!" or res in ["set", "match"]
+	sfx.crowd(big)
+	var mine := _my_team()
+	var counted := not _ai_human()
+	if counted:
+		Profile.add_stat("points_played")
+		if team == mine:
+			Profile.add_stat("points_won")
+		Profile.max_stat("longest_rally", rally_hits)
+	var here := _point_text(team, reason, res, 0)
 	if res == "match":
 		state = State.MATCH_OVER
 		state_timer = 4.0
-	var secs := 1.7 if res != "match" else 4.0
-	_message(_point_text(team, reason, res, 0), _point_text(team, reason, res, 1), secs)
+		_over_at = elapsed
+		if counted:
+			Profile.add_stat("matches")
+			if team == mine:
+				Profile.add_stat("wins")
+			if net_role != "":
+				Profile.add_stat("online_matches")
+				if team == mine:
+					Profile.add_stat("online_wins")
+		if career_venue != "":
+			here = _career_result(team == 0) + "\nTap HIT to continue"
+			state_timer = 6.0
+	if counted:
+		Profile.save()
+	var secs := 1.7 if res != "match" else (6.0 if career_venue != "" else 4.0)
+	_message(here, _point_text(team, reason, res, 1), secs)
 	_send_score()
 	if quit_after > 0.0:
 		print("[point] %-26s -> team %d (%s)  hits=%d  sets %s games %s pts %s/%s" % [
@@ -1095,7 +1445,7 @@ func _on_floor(pos: Vector3) -> void:
 		else:
 			_award(1 - last_hitter_team, "Into the net")
 		return
-	if practice and last_hitter_team == 0:
+	if practice and last_hitter_team == 0 and not challenge:
 		_practice_judge(pos, true)
 		return
 	receiver_bounces += 1
@@ -1115,6 +1465,18 @@ func _on_wall(pos: Vector3, surface: String) -> void:
 	if state != State.RALLY:
 		return
 	var end := Court.side_of(pos.z)
+	if challenge and last_hitter_team == 0 and end == 1:
+		if absf(pos.z) > Court.HALF_L - 0.3:
+			var c := _goal_centre(ch_t)
+			var inside := surface == "glass" and absf(pos.x - c.x) <= ch_size.x * 0.5 + Ball.RADIUS \
+				and absf(pos.y - c.y) <= ch_size.y * 0.5 + Ball.RADIUS
+			_challenge_result(inside, "" if inside else ("Into the fence" if surface == "mesh" else "Wide of the goal"))
+			return
+		if surface == "mesh":
+			_challenge_result(false, "Into the fence")
+			return
+		_refresh_prediction()   # off the side glass: it can still reach the goal
+		return
 	if end != last_hitter_team:
 		if receiver_bounces == 0:
 			if serve_in_play:
@@ -1183,6 +1545,11 @@ func _physics_process(delta: float) -> void:
 		var a := Vector2(randf_range(-1, 1), randf_range(-0.5, 0.8))
 		_on_shot_requested("smash" if randf() < 0.15 else Hud.swipe_kind(a), a)
 	_read_keyboard()
+	if challenge:
+		if state != State.MATCH_OVER:
+			ch_t += delta
+		_place_goal(ch_t)
+	_squeak_cd = maxf(0.0, _squeak_cd - delta)
 	if net_role == "client":
 		_client_tick(delta)
 		return
@@ -1206,7 +1573,9 @@ func _physics_process(delta: float) -> void:
 				_start_point()
 		State.MATCH_OVER:
 			state_timer -= delta
-			if state_timer <= 0.0 and _ai_human():
+			if state_timer <= 0.0 and career_venue != "" and not _ai_human():
+				_career_continue()
+			elif state_timer <= 0.0 and _ai_human():
 				score = MatchScore.create(score.games_per_set, score.sets_to_win, score.golden_point)
 				_start_point()
 	_update_hud()
@@ -1306,9 +1675,9 @@ func _refresh_prediction() -> void:
 	if pick != last_callout[next_team]:
 		last_callout[next_team] = pick
 		if next_team == 0 and not _ai_human():
-			hud.callout("ANA: MINE!" if pick != _human() else "ANA: YOURS!")
+			hud.callout("%s: %s" % [players[1].display_name, "MINE!" if pick != _human() else "YOURS!"])
 		elif remote_player and next_team == remote_player.team:
-			net_callout.rpc_id(remote_peer, "LEO: MINE!" if pick != remote_player else "LEO: YOURS!")
+			net_callout.rpc_id(remote_peer, "%s: %s" % [players[3].display_name, "MINE!" if pick != remote_player else "YOURS!"])
 
 
 func _first_x_on(team: int) -> float:
@@ -1417,13 +1786,14 @@ func _ai_hit(p: Player) -> void:
 	for o in _team(1 - p.team):
 		if absf(o.position.z) > 5.2:
 			opp_at_net = false
+	var st := _style(p)
 	if bp.y > 2.0:
-		kind = "smash" if absf(bp.z) < 6.0 and randf() < 0.55 else "bandeja"
-	elif opp_at_net and randf() < 0.4:
+		kind = "smash" if absf(bp.z) < 6.0 and randf() < (0.8 if st == "Power" else 0.55) else "bandeja"
+	elif opp_at_net and randf() < (0.55 if st == "Touch" else 0.4):
 		kind = "lob"
-	elif absf(p.position.z) > 7.5 and randf() < 0.18:
+	elif absf(p.position.z) > 7.5 and randf() < (0.28 if st == "Touch" else 0.18):
 		kind = "lob"   # defensive lob from the back
-	elif receiver_bounces >= 1 and bp.y < 1.15 and randf() < 0.3:
+	elif receiver_bounces >= 1 and bp.y < 1.15 and randf() < (0.5 if st == "Touch" else 0.3):
 		kind = "slice"  # low ball: cut it
 	# aim away from the nearer opponent
 	var nearest := 0.0
@@ -1436,7 +1806,8 @@ func _ai_hit(p: Player) -> void:
 	var away := -signf(nearest) if nearest != 0.0 else (1.0 if randf() < 0.5 else -1.0)
 	var aim := Vector2(clampf(away * randf_range(0.2, 0.9) + randf_range(-0.3, 0.3), -1, 1), randf_range(-0.4, 0.7))
 	var diff := _difficulty(p)
-	var q := clampf(p.skill - diff * 0.6 + randf_range(-0.15, 0.15), 0.15, 1.0)
+	var edge := 0.05 if st == "Touch" else (0.02 if st == "All-rounder" else 0.0)
+	var q := clampf(p.skill + edge - diff * 0.6 + randf_range(-0.15, 0.15), 0.15, 1.0)
 	_do_hit(p, kind, aim, q, 0.02 + diff * 0.2)
 
 
@@ -1500,6 +1871,14 @@ func _on_shot_requested(kind: String, aim: Vector2) -> void:
 	if net_role == "client":
 		net_shot.rpc_id(1, kind, aim)
 		return
+	if state == State.MATCH_OVER and elapsed - _over_at < 1.2:
+		return   # a stray tap straight after the end: let them read the result
+	if state == State.MATCH_OVER and not _ai_human() and challenge:
+		_start_daily()
+		return
+	if state == State.MATCH_OVER and not _ai_human() and career_venue != "":
+		_career_continue()
+		return
 	if state == State.MATCH_OVER and not _ai_human():
 		_on_mode_chosen(mode, score.golden_point)
 		if net_role == "host":
@@ -1526,6 +1905,11 @@ func _pad_shot(pad: Pad, kind: String, aim: Vector2) -> void:
 
 ## A person's player: stick or move-assist, and HIT that fires at contact while held.
 func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
+	# trainers squeak on a hard change of direction
+	var mv := pad.world_move()
+	if mv.length() > 0.6 and p.vel.length() > 2.6 and p.vel.normalized().dot(mv.normalized()) < -0.3 and _squeak_cd <= 0.0:
+		_squeak_cd = 0.6
+		sfx.at("squeak", p.position, -10.0)
 	if pad.move.length() > 0.1:
 		p.move_dir(pad.world_move(), delta)
 	elif MOVE_ASSIST > 0.0 and assigned[p.team] == p and intercepts.has(p):
@@ -1576,20 +1960,30 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 			fx = "OFF THE GLASS!"
 		elif kind == "slice":
 			fx = "SLICE"
+		if p == _human() and not _ai_human():
+			if kind == "power_smash":
+				Profile.add_stat("power_smashes")
+			elif fx == "BAJADA!":
+				Profile.add_stat("bajadas")
+			if kind == "slice":
+				Profile.add_stat("slices")
+			if q > 0.85:
+				Profile.add_stat("perfect")
 		var ms := 60 if q > 0.85 else 25
 		if p == remote_player:
 			net_feedback.rpc_id(remote_peer, fx, ms)
 		else:
 			if fx != "":
 				hud.flash(fx)
-			Input.vibrate_handheld(ms)
+			Profile.vibrate(ms)
 
 
 func _timing_quality(p: Player) -> float:
 	var bp := ball.sim.pos
 	var ideal := 2.3 if bp.y > 2.0 else 1.0
 	var d := Vector2(bp.x - p.position.x, bp.z - p.position.z).length()
-	return clampf(1.0 - absf(bp.y - ideal) * 0.45 - absf(d - 0.55) * 0.35, 0.25, 1.0)
+	var bonus := 0.06 if _style(p) == "Touch" else (0.02 if _style(p) == "All-rounder" else 0.0)
+	return clampf(1.0 - absf(bp.y - ideal) * 0.45 - absf(d - 0.55) * 0.35 + bonus, 0.25, 1.0)
 
 
 ## [timing arc 0..1, SMASH charge 0..1] for a person's player.
@@ -1665,6 +2059,8 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 	# bajada: a well-timed ball taken off your own back glass comes out with extra pace
 	if wall_since_bounce and q >= 0.7 and kind == "drive":
 		speed += 3.5
+	if _style(p) == "Power" and kind in ["drive", "smash", "power_smash"]:
+		speed += 1.5
 	var err := (1.0 - q) * 1.4
 	to.x = clampf(to.x + randf_range(-err, err), -4.6, 4.6)
 	to.z = -s * clampf(absf(to.z) + randf_range(-err, err) * 0.8, 0.8, 10.6)
@@ -1685,6 +2081,8 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 	last_hit_volley = receiver_bounces == 0
 	if trace:
 		print("[hit] t=%.1f %s %s from=%s to=%s q=%.2f b=%d" % [elapsed, p.display_name, kind, from.snapped(Vector3.ONE * 0.1), to.snapped(Vector3.ONE * 0.1), q, receiver_bounces])
+	var hard := kind in ["smash", "power_smash"]
+	sfx.at("smash" if hard else "paddle", from, (2.0 if kind == "power_smash" else 0.0) if hard else clampf(speed * 0.35 - 6.0, -6.0, 0.0))
 	p.swing(kind)
 	p.hit_cooldown = 0.4
 	last_hitter_team = p.team

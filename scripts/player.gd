@@ -21,6 +21,8 @@ var hit_cooldown := 0.0
 var swing_count := 0       # bumped on every swing; lets a network client replay swings
 var last_swing := "drive"
 var smash_charge := 0.0    # 0..1, people only (see main.gd)
+var style := ""            # Roster style: "Power" | "Touch" | "Speed" | "All-rounder"
+var _ring: MeshInstance3D  # team colour at the feet (the character kits are baked in)
 
 var shirt := Color("f28c28")
 var skin := Color("e3b48c")
@@ -103,6 +105,27 @@ func setup(p_team: int, p_name: String, p_slot: float, p_shirt: Color, p_skin: C
 func _ready() -> void:
 	_build()
 	face_net()
+	_ring = MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.34
+	tm.outer_radius = 0.42
+	tm.rings = 24
+	_ring.mesh = tm
+	_ring.scale = Vector3(1, 0.03, 1)
+	_ring.position.y = 0.015
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(1.0, 0.55, 0.16, 0.55) if team == 0 else Color(0.6, 0.45, 1.0, 0.55)
+	_ring.material_override = m
+	_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_ring)
+
+
+## Rename (tag over the head for everyone but your own player).
+func set_display_name(n: String) -> void:
+	display_name = n
+	set_tag("" if is_human else n)
 
 
 func face_net() -> void:
@@ -389,6 +412,11 @@ func _build_paddle(hand: Node3D) -> void:
 func use_model(scene: PackedScene) -> void:
 	if _body == null:
 		await ready
+	if _model:
+		_model.queue_free()       # swapping characters
+		_model = null
+		_skel = null
+		_bones.clear()
 	_model = scene.instantiate()
 	_model.rotation.y = PI          # Meshy faces +Z; players face -Z
 	_body.add_child(_model)
