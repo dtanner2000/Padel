@@ -62,6 +62,9 @@ var _swinging := false
 var replaying := false     # a replay is posing the rig: skip the live animation
 var _hat: Node3D           # cosmetic headwear, on the model's head bone
 var _band: MeshInstance3D  # cosmetic wristband on the paddle arm
+var _hat_holder: Node3D
+var _clip_mats: Array[ShaderMaterial] = []   # cap on: character materials that hide the hair under it
+const CLIP_SHADER := preload("res://shaders/character_clip.gdshader")
 
 # Paddle-arm poses, written as where the upper arm and the forearm point, in
 # the player's own frame: +x = out to the paddle side, +y = up, -z = forwards
@@ -163,6 +166,7 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 		var holder := Node3D.new()
 		holder.scale = Vector3.ONE * 100.0   # the skeleton is in centimetres
 		att.add_child(holder)
+		_hat_holder = holder
 		var m := StandardMaterial3D.new()
 		m.albedo_color = hat_col
 		m.roughness = 0.7
@@ -194,22 +198,23 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 				# crown: a full-height dome sitting low enough to cover the hair,
 				# tipped forward so the front edge meets the forehead
 				var dome := SphereMesh.new()
-				dome.radius = 0.127
-				dome.height = 0.13
+				dome.radius = CAP_R.x
+				dome.height = 0.125
 				dome.is_hemisphere = true
 				dome.radial_segments = 28
 				dome.rings = 10
-				add.call(dome, Vector3(0, CAP_BASE, 0.014), Vector3(-0.2, 0, 0), Vector3(0.95, 1.0, 1.1))
+				add.call(dome, Vector3(0, CAP_BASE, 0.012), Vector3(CAP_TILT, 0, 0), Vector3(1.0, 1.0, CAP_R.y / CAP_R.x))
 				var button := SphereMesh.new()
-				button.radius = 0.012
-				button.height = 0.024
-				add.call(button, Vector3(0, CAP_BASE + 0.128, -0.008))
+				button.radius = 0.009
+				button.height = 0.012
+				add.call(button, Vector3(0, CAP_BASE + 0.121, -0.03))
 				var brim := MeshInstance3D.new()
 				brim.mesh = _cap_brim()
 				brim.position = Vector3(0, CAP_BASE - 0.004, 0.014)
-				brim.rotation.x = -0.2
+				brim.rotation.x = CAP_TILT
 				brim.material_override = m
 				holder.add_child(brim)
+	_set_hair_clip(hat == "cap")
 	if _band == null:
 		var bm := CylinderMesh.new()
 		bm.top_radius = 0.045
@@ -221,7 +226,46 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color) -> void:
 	(_band.material_override as StandardMaterial3D).albedo_color = band_col
 
 
-const CAP_BASE := 0.158    # cap crown rim height above the head bone (m)
+## Cap on: draw the character with a material that hides the hair under the
+## cap (otherwise it pokes through a snug crown). Off: the imported material.
+func _set_hair_clip(on: bool) -> void:
+	_clip_mats.clear()
+	for n in _model.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if _hat and _hat.is_ancestor_of(mi):
+			continue   # the cap itself
+		if not on:
+			mi.material_override = null
+			continue
+		var src := mi.get_active_material(0) as BaseMaterial3D
+		if src == null:
+			continue
+		var sm := ShaderMaterial.new()
+		sm.shader = CLIP_SHADER
+		sm.set_shader_parameter("albedo_tex", src.albedo_texture)
+		sm.set_shader_parameter("albedo_col", src.albedo_color)
+		sm.set_shader_parameter("roughness_v", src.roughness)
+		sm.set_shader_parameter("clip_on", true)
+		mi.material_override = sm
+		_clip_mats.append(sm)
+
+
+## Keep the hair clip on the cap's rim as the head moves.
+func _update_hair_clip() -> void:
+	if _clip_mats.is_empty() or _hat_holder == null:
+		return
+	var g := _hat_holder.global_transform
+	var tilt := Basis(Vector3.RIGHT, CAP_TILT)
+	var centre := g * Vector3(0, CAP_BASE, 0.012)
+	var up := (g.basis * (tilt * Vector3.UP)).normalized()
+	for sm in _clip_mats:
+		sm.set_shader_parameter("clip_centre", centre)
+		sm.set_shader_parameter("clip_normal", up)
+
+
+const CAP_TILT := -0.26
+const CAP_BASE := 0.14
+const CAP_R := Vector2(0.106, 0.12)   # crown rim radii (x across, z front-back): hugs the head    # cap crown rim height above the head bone (m)
 
 
 ## A cap peak: the front half of a ring, longest at the front, tapering to the
@@ -230,16 +274,16 @@ static func _cap_brim() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var n := 18
-	var inner := Vector2(0.127 * 0.95, 0.127 * 1.1)   # crown rim (x, z radii)
+	var inner := CAP_R   # crown rim (x, z radii)
 	var pts: Array = []
 	for i in n + 1:
 		var a := lerpf(-PI * 0.42, PI * 0.42, float(i) / n)   # around the front only
 		var s := sin(a)
 		var c := cos(a)
-		var length := 0.085 * pow(c, 0.8)                     # longest straight ahead
-		var droop := -0.022 * s * s                            # edges curl down
+		var length := 0.088 * pow(c, 1.2)                     # longest straight ahead
+		var droop := -0.03 * s * s                             # edges curl down
 		var p_in := Vector3(s * inner.x, 0.0, c * inner.y)
-		var p_out := Vector3(s * (inner.x + length * 0.35), droop - 0.006 * c, c * (inner.y + length))
+		var p_out := Vector3(s * (inner.x + length * 0.15), droop - 0.012 * c, c * (inner.y + length))
 		pts.append([p_in, p_out])
 	for i in n:
 		var a0: Array = pts[i]
@@ -681,6 +725,7 @@ func _aim_one(i: int, child: int, parent_g: Transform3D, target: Vector3) -> Tra
 
 
 func _drive_model() -> void:
+	_update_hair_clip()
 	var wrist: Variant = _aim_limb("RightArm", "RightForeArm", "RightHand", _elbow.global_position, _hand.global_position)
 	_aim_limb("LeftArm", "LeftForeArm", "LeftHand", _off_hand.get_parent_node_3d().global_position, _off_hand.global_position)
 	_aim_limb("LeftUpLeg", "LeftLeg", "LeftFoot", _knee_l.global_position, _knee_l.get_node("Ankle").global_position)
