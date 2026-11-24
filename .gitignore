@@ -16,3 +16,6 @@ Thumbs.db
 
 # gltf tools
 tools/gltf/node_modules/
+
+# fetched by the Codemagic iOS build (Game Center plugin)
+/addons/GodotApplePlugins*/

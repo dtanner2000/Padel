@@ -69,6 +69,22 @@ workflows:
           mkdir -p "$DEST" && mv templates/* "$DEST"/
           test -f "$DEST/ios.zip" || { echo "FATAL: ios.zip missing from templates"; exit 1; }
 
+      # Game Center: GodotApplePlugins (GameCenter + the Swift runtime it needs).
+      # Too big for the repo (~300 MB), so it's fetched per build at a pinned release.
+      - name: Fetch Game Center plugin
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          REL=a66f619a253cbc39922ff9018b2307b6ec6862cc
+          curl -fsSL "https://github.com/xibbon/GodotApplePlugins/releases/download/build-$REL/GodotApplePlugins-addons-$REL.zip" -o gap.zip
+          unzip -q gap.zip -d gap && rm gap.zip
+          mkdir -p addons
+          for p in GodotApplePluginsGameCenter GodotApplePluginsRuntime; do
+            rm -rf "addons/$p" && cp -R "gap/dist/addons/$p" addons/
+          done
+          rm -rf gap addons/*/bin/*.dSYM
+          ls addons/GodotApplePluginsGameCenter/bin addons/GodotApplePluginsRuntime/bin
+
       - name: Set build number + import resources
         script: |
           set -e

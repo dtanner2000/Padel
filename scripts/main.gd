@@ -203,6 +203,7 @@ func _ready() -> void:
 	get_tree().physics_interpolation = true
 	_parse_args()
 	_setup_input()
+	GameServices.sign_in()
 	court = Court.new()
 	add_child(court)
 	scenery = Scenery.new()
@@ -1572,6 +1573,7 @@ func _start_point() -> void:
 func _check_awards() -> void:
 	if _ai_human():
 		return
+	GameServices.submit_bests()
 	var done := 0
 	for id in DRILL_INFO:
 		if bool(training.get_value(id, "done", false)):

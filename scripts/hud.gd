@@ -1053,14 +1053,27 @@ func _build_stats() -> void:
 	_stats_grid.add_theme_constant_override("h_separation", 22)
 	_stats_grid.add_theme_constant_override("v_separation", 6)
 	sc[1].add_child(_stats_grid)
-	sc[1].add_child(ab)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	row.add_child(ab)
+	# Game Center leaderboards + achievements (iOS, once signed in)
+	_gc_button = _button("Game Center", 15, Color(1, 1, 1, 0.14), Color.WHITE)
+	_gc_button.custom_minimum_size = Vector2(200, 38)
+	_gc_button.pressed.connect(GameServices.show_dashboard)
+	row.add_child(_gc_button)
+	sc[1].add_child(row)
 	sc[1].add_child(_back_button(_stats))
+
+
+var _gc_button: Button
 
 
 func show_stats(on: bool) -> void:
 	if not on:
 		_stats.visible = false
 		return
+	_gc_button.visible = GameServices.signed_in()
 	for c in _stats_grid.get_children():
 		c.queue_free()
 	var played := Profile.stat("matches")

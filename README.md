@@ -50,7 +50,9 @@ Big points get a slow-motion replay from a low side-on camera: a winning power s
 
 You earn **coins** for points won (2), matches (5, plus 15 for a win), career rounds (25, a title 100), first-time drills (20), daily goals (3 each) and achievements (50). The Wardrobe (Locker → Wardrobe) sells headwear (headband, visor, cap, in eight colours), a wristband, and paddle colourways. Looks only. Real-money purchases would need the App Store / Play billing plugins; the coin economy is ready for that.
 
-There are 21 **achievements** (Stats → Achievements). When a Game Center (iOS) or Play Games Services (Android) plugin is added to the export, unlocks are also reported there (`scripts/awards.gd`, `report()`). Create achievements with the same ids in App Store Connect / Play Console.
+There are 21 **achievements** (Stats → Achievements).
+
+**Game Center (iOS).** The game signs in at launch, reports achievements and posts three leaderboards: `daily_best`, `longest_rally` and `online_rating` (`scripts/game_services.gd`). Stats has a Game Center button for the dashboard once signed in. It uses [GodotApplePlugins](https://github.com/xibbon/GodotApplePlugins) (GameCenter + Runtime), which the Codemagic iOS build downloads at a pinned release because it's ~300 MB; everything is looked up by name, so the editor, desktop and Android builds run without it. Needs iOS 17+ and `entitlements/game_center` (both set in `export_presets.cfg`). In App Store Connect → the app → Game Center, create each achievement with the same id as `Awards.list()`, and the three leaderboards as "Classic, best score, high to low". Google Play Games is a later step (`report()` already calls it if its plugin is present).
 
 ### Accessibility
 
@@ -62,7 +64,7 @@ Online → **Doubles, 4 phones** makes a room code for up to four phones: the 2n
 
 ### Ranked online
 
-Random quick matches are ranked (Elo, starting at 1000, K = 32; Bronze, Silver from 1050, Gold 1150, Platinum 1300, Diamond 1500). Private games with a code are unranked. The relay pairs players by rating, starting within 150 points and widening by 40 a second, so nobody waits long. After a match, both players tap HIT for a **rematch**, and each phone shows whether the other has asked. Ratings live on each phone; a server-side ladder would need accounts, which the game avoids. Game Center / Google Play Games leaderboards and friends need native plugins and are a later step.
+Random quick matches are ranked (Elo, starting at 1000, K = 32; Bronze, Silver from 1050, Gold 1150, Platinum 1300, Diamond 1500). Private games with a code are unranked. The relay pairs players by rating, starting within 150 points and widening by 40 a second, so nobody waits long. After a match, both players tap HIT for a **rematch**, and each phone shows whether the other has asked. Ratings live on each phone; a server-side ladder would need accounts, which the game avoids. Ratings are also posted to the Game Center `online_rating` leaderboard.
 
 Everything is saved in `user://profile.cfg` (`scripts/profile.gd`). Training progress is in `user://training.cfg`.
 

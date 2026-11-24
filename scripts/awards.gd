@@ -1,8 +1,7 @@
 class_name Awards
 extends RefCounted
 ## Achievements: checked against the saved profile after anything notable.
-## Each pays coins. When a Game Center (iOS) or Play Games (Android) plugin is
-## installed, unlocks are reported there too (see report()).
+## Each pays coins, and unlocks go to Game Center on iOS (see report()).
 
 const COINS := 50
 
@@ -57,10 +56,9 @@ static func check(ctx: Dictionary) -> Array:
 	return fresh
 
 
-## Game Center / Play Games, when their plugins are in the build. Create the
-## achievements in App Store Connect / Play Console with these same ids.
+## Game Center (GameServices) / Play Games, when their plugins are in the build.
+## Create the achievements in App Store Connect / Play Console with these same ids.
 static func report(id: String) -> void:
-	if Engine.has_singleton("GameCenter"):
-		Engine.get_singleton("GameCenter").call("post_achievement", {"name": id, "progress": 100.0, "show_completion_banner": true})
-	elif Engine.has_singleton("GodotPlayGameServices"):
+	GameServices.achievement(id)
+	if Engine.has_singleton("GodotPlayGameServices"):
 		Engine.get_singleton("GodotPlayGameServices").call("achievementsUnlock", id, true)
