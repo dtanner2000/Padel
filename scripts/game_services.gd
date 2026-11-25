@@ -94,3 +94,21 @@ static func submit_bests() -> void:
 	score("longest_rally", Profile.stat("longest_rally"))
 	if Profile.stat("online_matches") > 0:
 		score("online_rating", Profile.rating())
+
+
+## Apple's rating prompt (StoreKit plugin), after a win: on the first win,
+## the third and the tenth, never twice in a day. iOS decides whether it
+## actually shows (at most three times a year).
+static func maybe_ask_review() -> void:
+	if OS.get_name() != "iOS" or not ClassDB.class_exists("StoreKitManager"):
+		return
+	var wins := Profile.stat("wins")
+	if not wins in [1, 3, 10, 25]:
+		return
+	var today := Profile.today()
+	if Profile.get_v("review", "asked", "") == today:
+		return
+	Profile.set_v("review", "asked", today)
+	Profile.save()
+	var sk: Object = ClassDB.instantiate("StoreKitManager")
+	sk.call("request_review")

@@ -29,6 +29,7 @@ const TRAIL_N := 14
 const CONTRAST_COLOUR := Color("ff3df2")   # high-contrast: magenta reads on every court colour
 var base_colour := BALL_COLOUR
 var trail_on := false
+var _burst := 0.0                 # a smash: a hot trail for a moment, whatever the setting
 const BALL_COLOUR := Color("d9f542")
 const SLICE_COLOUR := Color("7fd6ff")
 ## Shown spin for the visual tint; the online guest sets this from snapshots.
@@ -98,6 +99,12 @@ func set_look(large: bool, contrast: bool, trail: bool) -> void:
 	add_child(_shadow)
 
 
+func burst(secs: float) -> void:
+	if _burst <= 0.0:
+		_trail_pos.clear()
+	_burst = secs
+
+
 func place(p: Vector3) -> void:
 	sim.pos = p
 	sim.vel = Vector3.ZERO
@@ -126,7 +133,11 @@ func _physics_process(delta: float) -> void:
 	_mat.albedo_color = c
 	_mat.emission = c
 	_shadow.global_position = Vector3(position.x, 0.012, position.z)
-	if trail_on:
+	_burst = maxf(0.0, _burst - delta)
+	_trail.visible = trail_on or _burst > 0.0
+	if _trail.visible:
+		if _burst > 0.0:
+			c = Color(1.0, 0.62, 0.18).lerp(c, clampf(1.0 - _burst, 0.0, 1.0))
 		if _trail_pos.is_empty() or _trail_pos[0].distance_to(position) > 0.02:
 			_trail_pos.push_front(position)
 			if _trail_pos.size() > TRAIL_N:

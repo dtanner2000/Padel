@@ -172,6 +172,15 @@ var _replay_wait := 0.0
 var _replay_cam_side := 1.0
 var _replay_snd_i := -1
 var _celeb_won := 0
+var tutorial := -1                 # first launch: step of the guided first rally (-1 off)
+const TUT := [
+	{"drill": "ground", "goal": 2, "msg": "Welcome to Off The Glass!\nHold HIT as the ball comes. Let go when the ring is full."},
+	{"drill": "aim", "goal": 1, "msg": "Now aim it: hold HIT and swipe up-left or up-right\nto land the ball in the lit box."},
+	{"drill": "smash", "goal": 1, "msg": "SMASH glows when it's charged.\nOn a high ball, tap SMASH to send it out of the court!"},
+]
+var _shake := 0.0                  # camera shake, decays
+var _impact_fx: MeshInstance3D     # a flash ring where a smash lands
+var _impact_t := -1.0
 var _just_started := true          # a new match: flash your ring on the first serve                # the team celebrating (for after a replay)            # last replay frame whose sounds have played
 var _since_replay := 99            # points since the last replay (long rallies wait their turn)
 var _rec_total := 0                # frames ever recorded this point
@@ -260,6 +269,8 @@ func _ready() -> void:
 		sfx.at("floor", pos, clampf(ball.sim.vel.length() * 0.8 - 14.0, -16.0, -4.0)))
 	ball.wall_hit.connect(func(pos: Vector3, surface: String) -> void:
 		var loud := clampf(ball.sim.vel.length() * 0.9 - 12.0, -12.0, 2.0)
+		if surface == "glass" and ball.sim.vel.length() > 15.0 and state == State.RALLY:
+			_shake = maxf(_shake, 0.1)
 		sfx.at("glass" if surface == "glass" else "mesh", pos, loud))
 	ball.net_hit.connect(func(pos: Vector3) -> void: sfx.at("net", pos, -4.0))
 	lineup = Roster.lineup(Profile.character(), Profile.partner())
@@ -296,11 +307,14 @@ func _ready() -> void:
 		_apply_kit()
 		_check_awards())
 	hud.settings_changed.connect(func() -> void:
+		_apply_fps()
 		sfx.apply_settings()
 		ball.set_look(Profile.ball_large(), Profile.ball_contrast(), Profile.ball_trail())
 		if mode == "menu":
 			_apply_venue(Profile.get_v("settings", "court", "club")))
 	_make_goal_frame()
+	_make_impact_fx()
+	_apply_fps()
 	wall_target = _goal_node(Color("ff7a1a"))
 	wall_target.scale = Vector3(WT_SIZE.x, WT_SIZE.y, 1.0)
 	ball.set_look(Profile.ball_large(), Profile.ball_contrast(), Profile.ball_trail())
@@ -341,6 +355,9 @@ func _ready() -> void:
 			_online_create(start_online.get_slice(":", 1), true, test_room)
 		elif start_online.begins_with("join:"):
 			_online_join(start_online.get_slice(":", 1))
+	elif "--tutorial" in OS.get_cmdline_user_args():
+		_go_menu()
+		_start_tutorial()
 	elif start_mode.begins_with("drill:"):
 		_start_training(start_mode.get_slice(":", 1))
 	elif start_mode == "daily":
@@ -355,7 +372,12 @@ func _ready() -> void:
 		_go_menu()
 		# the studio ident: on a real launch (not a test run), or with --intro
 		if (quit_after < 0.0 and shot_path == "" and not Array(OS.get_cmdline_user_args()).any(func(a: String) -> bool: return a.begins_with("--screen"))) or "--intro" in OS.get_cmdline_user_args():
-			add_child(Intro.new())
+			var intro := Intro.new()
+			add_child(intro)
+			_warm_up()
+			if not bool(Profile.get_v("tutorial", "done", false)) and quit_after < 0.0:
+				intro.finished.connect(_start_tutorial)
+
 		if "--show-training" in OS.get_cmdline_user_args():
 			hud.show_training(true, _training_summary())
 		for a in OS.get_cmdline_user_args():
@@ -875,6 +897,9 @@ func _team_name(team: int, viewer: int) -> String:
 # --- modes ----------------------------------------------------------------------
 
 func _go_menu() -> void:
+	if tutorial >= 0:
+		tutorial = -1
+		Profile.set_v("tutorial", "done", true)
 	mode = "menu"
 	attract = true
 	practice = false
@@ -1218,6 +1243,45 @@ func _start_training(id: String) -> void:
 	hud.show_message("%s\n%s" % [DRILL_INFO[id].name, DRILL_INFO[id].tip], 4.0)
 
 
+func _drill_goal() -> int:
+	return TUT[tutorial].goal if tutorial >= 0 else DRILL_INFO[drill_id].goal
+
+
+# --- first launch: a guided first rally ---------------------------------------------
+
+func _start_tutorial() -> void:
+	tutorial = 0
+	_tut_step()
+
+
+func _tut_step() -> void:
+	var st: Dictionary = TUT[tutorial]
+	_start_training(st.drill)
+	hud.show_message(st.msg, 6.0)
+
+
+func _tut_next() -> void:
+	tutorial += 1
+	sfx.ui("ding", -4.0)
+	if tutorial < TUT.size():
+		hud.show_message("✓ Nice!", 1.0)
+		get_tree().create_timer(1.1).timeout.connect(func() -> void:
+			if tutorial > 0 and practice:
+				_tut_step())
+		return
+	tutorial = -1
+	Profile.set_v("tutorial", "done", true)
+	Profile.save()
+	sfx.ui("success", -3.0)
+	state = State.MATCH_OVER
+	_over_at = elapsed
+	hud.show_message("You're ready!\nYour Career starts at Club Night.", 30.0)
+	_offer([["Start Career ›", func() -> void:
+			_go_menu()
+			hud.show_career(true)],
+		["Menu", _go_menu]])
+
+
 func _training_summary() -> Dictionary:
 	var out := {}
 	for id in DRILL_INFO:
@@ -1231,7 +1295,7 @@ func _training_summary() -> Dictionary:
 
 
 func _training_hud() -> void:
-	var goal: int = DRILL_INFO[drill_id].goal
+	var goal: int = _drill_goal()
 	if goal > 0 and drill_done < goal:
 		hud.set_rally_text("GOAL %d/%d  ·  STREAK %d" % [drill_done, goal, streak])
 	else:
@@ -2112,12 +2176,14 @@ func _practice_result(good: bool, reason: String) -> void:
 	aim_marker.visible = false
 	stats.points += 1
 	stats.reasons[reason] = stats.reasons.get(reason, 0) + 1
-	var goal: int = DRILL_INFO[drill_id].goal
+	var goal: int = _drill_goal()
 	if good:
 		streak += 1
 		drill_done += 1
 		best_streak = maxi(best_streak, streak)
-		if goal > 0 and drill_done == goal:
+		if goal > 0 and drill_done == goal and tutorial >= 0:
+			_tut_next()
+		elif goal > 0 and drill_done == goal:
 			var first := not bool(training.get_value(drill_id, "done", false))
 			if first:
 				Profile.add_stat("skill_points_earned")
@@ -2264,6 +2330,8 @@ func _award(team: int, reason: String) -> void:
 				sfx.ui("success", -4.0)
 			here = _career_result(team == 0)
 			state_timer = 6.0
+		if net_role == "" and counted and team == 0:
+			get_tree().create_timer(3.0).timeout.connect(GameServices.maybe_ask_review)
 		if net_role == "" and counted:
 			if career_venue != "":
 				_offer(_career_choices(team == 0))
@@ -2323,6 +2391,9 @@ func _fault() -> void:
 func _on_floor(pos: Vector3) -> void:
 	if state != State.RALLY:
 		return
+	if receiver_bounces == 0 and last_shot_kind in ["power_smash", "por_cuatro", "smash"] and Court.side_of(pos.z) != last_hitter_team:
+		_impact(pos)
+		_shake = maxf(_shake, 0.18 if last_shot_kind == "smash" else 0.3)
 	var side := Court.side_of(pos.z)
 	if side == last_hitter_team:
 		if serve_in_play:
@@ -2418,6 +2489,70 @@ func _on_out(_pos: Vector3) -> void:
 
 ## Gentle follow: drifts with the ball and your player, pulls back when you go deep.
 ## In versus the friend's camera sits at the far end, looking the other way.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		Profile.save()
+		# a call or a swipe home mid-point: stop the game (online can't pause)
+		if mode != "menu" and not attract and net_role == "" and hud and state != State.MATCH_OVER:
+			hud.pause()
+
+
+## Battery saver: 30 fps; otherwise 60 (no point running 120 Hz flat out).
+func _apply_fps() -> void:
+	Engine.max_fps = 30 if Profile.get_v("settings", "battery", false) else 60
+
+
+## Smashes land with a thump: a 60-ish ms freeze (offline only, so online
+## stays in step) and a camera kick.
+func _hitstop(secs: float, shake := 0.0) -> void:
+	_shake = maxf(_shake, shake)
+	if net_role != "" or secs <= 0.0:
+		return
+	Engine.time_scale = 0.05
+	await get_tree().create_timer(secs, true, false, true).timeout
+	Engine.time_scale = 1.0
+
+
+func _make_impact_fx() -> void:
+	_impact_fx = MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.42
+	tm.outer_radius = 0.5
+	tm.rings = 32
+	_impact_fx.mesh = tm
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(1.0, 0.65, 0.2, 0.9)
+	_impact_fx.material_override = m
+	_impact_fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_impact_fx.visible = false
+	add_child(_impact_fx)
+
+
+func _impact(pos: Vector3) -> void:
+	_impact_fx.position = Vector3(pos.x, 0.03, pos.z)
+	_impact_t = 0.0
+	_impact_fx.visible = true
+
+
+## While the ident plays: show every venue, marker and effect for a frame
+## behind it, so their shaders compile now and not mid-rally (no stutter on
+## the first smash or the first visit to a court).
+func _warm_up() -> void:
+	var extras: Array[Node3D] = [aim_marker, goal_frame, wall_target, target_marker, machine, _impact_fx, ring]
+	for n in extras:
+		n.visible = true
+	ball.burst(0.5)
+	for v in Roster.VENUES + Roster.EXTRA_VENUES:
+		_apply_venue(v.id)
+		await get_tree().process_frame
+		await get_tree().process_frame
+	for n in extras:
+		n.visible = false
+	_apply_venue(Profile.get_v("settings", "court", "club"))
+
+
 func _process(delta: float) -> void:
 	# quick match: offer the AI if nobody turns up (new games have quiet queues)
 	var waited := online.search_seconds() > 25.0
@@ -2430,6 +2565,15 @@ func _process(delta: float) -> void:
 		if _ping_timer <= 0.0:
 			_ping_timer = 1.0
 			net_ping.rpc_id(remotes.keys()[0] if net_role == "host" and not remotes.is_empty() else 1, Time.get_ticks_msec())
+	if _impact_t >= 0.0:
+		_impact_t += delta
+		var k := _impact_t / 0.4
+		var r := 0.4 + 2.2 * k
+		_impact_fx.scale = Vector3(r, 0.04, r)
+		(_impact_fx.material_override as StandardMaterial3D).albedo_color.a = 0.9 * (1.0 - k)
+		if k >= 1.0:
+			_impact_t = -1.0
+			_impact_fx.visible = false
 	if _replay_t >= 0.0:
 		# replay camera: low, beside the court, tracking the ball
 		var bp := ball.position
@@ -2467,6 +2611,13 @@ func _process(delta: float) -> void:
 		sgn * (cam_base.z + maxf(0.0, absf(me.position.z) - 8.0) * 0.6))
 	camera.position = camera.position.lerp(target, 1.0 - exp(-3.0 * delta))
 	camera.look_at(Vector3(camera.position.x * 0.5, 0.0, sgn * 1.0))
+	if _shake > 0.0:
+		_shake = maxf(0.0, _shake - delta * 2.5)
+		camera.h_offset = randf_range(-1, 1) * _shake * 0.14
+		camera.v_offset = randf_range(-1, 1) * _shake * 0.1
+	elif camera.h_offset != 0.0:
+		camera.h_offset = 0.0
+		camera.v_offset = 0.0
 
 
 func _physics_process(delta: float) -> void:
@@ -3032,6 +3183,10 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		if together:
 			miss = 0.0
 		_do_hit(p, kind, pad.world_aim(pad.aim), q, miss)
+		if kind in ["power_smash", "por_cuatro"] or together:
+			_hitstop(0.075, 0.4)
+		elif q > 0.85:
+			_hitstop(0.035, 0.08)
 		var was_full := p.smash_charge >= 1.0
 		_last_together = together
 		if together:
@@ -3226,6 +3381,8 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 	var hard := kind in ["smash", "power_smash"]
 	sfx.at("smash" if hard else "paddle", from, (2.0 if kind == "power_smash" else 0.0) if hard else clampf(speed * 0.35 - 6.0, -6.0, 0.0))
 	p.swing(kind)
+	if kind in ["power_smash", "por_cuatro", "smash", "combo"]:
+		ball.burst(0.9)
 	p.hit_cooldown = 0.4
 	_last_hit_at = _rec_total
 	last_hitter_team = p.team

@@ -956,6 +956,7 @@ const SETTINGS := [
 	["ball_trail", "Ball trail", ["Off", "On"], false],
 	["ball_contrast", "Ball colour", ["Classic", "Contrast"], false],
 	["ball_large", "Ball size", ["Normal", "Large"], false],
+	["battery", "Battery saver", ["Off", "On"], false],
 	["court_colour", "Court colour", [], ""],
 ]
 const COURT_COLOURS := [["", "Venue"], ["blue", "Blue"], ["green", "Green"], ["red", "Red"], ["teal", "Teal"], ["purple", "Purple"], ["pink", "Pink"], ["grey", "Grey"]]
@@ -1442,6 +1443,12 @@ func _build_online() -> void:
 		_menu.visible = true
 		online_closed.emit())
 	col.add_child(back)
+
+
+## The app went to the background mid-game: show the pause menu.
+func pause() -> void:
+	if not _pause_menu.visible:
+		_set_paused(true)
 
 
 func _set_paused(on: bool) -> void:

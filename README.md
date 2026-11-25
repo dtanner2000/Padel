@@ -10,6 +10,16 @@ Open the folder in **Godot 4.6** (4.4+ works) and press F5. On desktop, mouse cl
 
 The Godot boot splash is off (a plain dark screen while the engine loads). Then `scripts/intro.gd` plays a 3-second **SOLO GAMES** ident: a padel ball arcs in, cracks off the logo (it jolts, a ring of light, the glass sound) and bounces away, then it fades to the menu. Tap to skip. It only plays on a normal launch (`--intro` forces it in test runs).
 
+## Launch polish
+
+- **First launch**: after the ident, a guided first rally (`TUT` in main.gd): two groundstrokes, one aimed shot, one power smash, each with a coaching line, then "Start Career". Leaving early counts as done. `--tutorial` runs it in tests.
+- **Backgrounding**: a call, notification or swipe home mid-game opens the pause menu and saves (offline; online can't pause).
+- **Audio**: iOS session is Ambient (the silent switch mutes the game; other apps' music keeps playing).
+- **Frame rate**: capped at 60; Settings → Battery saver drops it to 30.
+- **Rating prompt**: Apple's review sheet (GodotApplePlugins StoreKit) after your 1st, 3rd, 10th and 25th win, never twice a day; iOS decides whether it shows.
+- **Shader warm-up**: while the ident plays, every venue and effect is shown for a frame behind it, so nothing compiles mid-rally.
+- **Game feel**: a ~75 ms hit-stop and camera kick on your power smash / por cuatro / combo winner (35 ms on a perfect hit), a hot trail on every smash, a flash ring where a smash lands, and a small shake when a fast ball hits the glass.
+
 ## Start menu
 
 A poster layout: the mode list on a dark slab cut by a diagonal of lime and blue stripes, with your pair celebrating on the right in your own kit (a small 3D scene rendered live into a `SubViewport`, `scripts/menu_hero.gd`, paused when the menu is hidden). Headings use **Anton** and the rest of the UI **Fira Sans** (both SIL Open Font License; licences in `assets/fonts/`). `tools/hero_render.gd` renders the same pair to a transparent PNG for store art.
