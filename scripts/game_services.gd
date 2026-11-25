@@ -111,4 +111,5 @@ static func maybe_ask_review() -> void:
 	Profile.set_v("review", "asked", today)
 	Profile.save()
 	var sk: Object = ClassDB.instantiate("StoreKitManager")
-	sk.call("request_review")
+	if sk != null and sk.has_method("request_review"):
+		sk.call("request_review")
