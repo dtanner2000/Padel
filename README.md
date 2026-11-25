@@ -36,7 +36,15 @@ Unlocked by career titles. Each also gets its own training drill.
 | **Chiquita** | Regional Open | Swipe HIT straight down: a soft dipping ball at the net players' feet |
 | **Contrapared** | National Championship | Beaten by a deep ball? Let it pass you and tap HIT. You play it into your own back glass and back over the net (the shot is found by simulating the ball physics) |
 
-The AI also plays víboras and chiquitas. Online, everyone has every shot.
+| **Dejada** | Club Night | At the net, swipe HIT down: a feathered drop shot with heavy backspin that dies just over the net |
+| **Globo** | Regional Open | Tap LOB with good timing (ring full) when they're at the net: a higher, deeper lob; net players react late |
+| **Por cuatro** | World Tour Finals | With SMASH charged, tap SMASH and swipe sideways (or hold the stick sideways): the topspin kick takes it out over the side wall. Found by simulating the ball physics, like the contrapared |
+
+The AI also plays víboras, chiquitas, dejadas, globos and the odd por cuatro. Online, everyone has every shot.
+
+### Partner combo
+
+In offline matches the **COMBO** button (above LOB) fills as your team plays good rallies: every hit by you or your partner, double for perfect timing, and a bonus for each point won. When it's full, tap it: your partner calls "Together! Next one's yours!", and your next shot is the team's winner (a por cuatro or power smash on a high ball, otherwise a hard drive into the open corner) while the rivals are wrong-footed. Win the point and the pair high-five.
 
 ### Venues, wind and court colours
 
@@ -54,7 +62,7 @@ After a winning special shot, a smash out of the court, or a set, the winning pa
 
 You earn **coins** for points won (2), matches (5, plus 15 for a win), career rounds (25, a title 100), first-time drills (20), daily goals (3 each) and achievements (50). The Wardrobe (Locker → Wardrobe) sells headwear (headband, Nadal-style bandana, visor, cap), 90s neon shirts (neon yellow, hot pink, blaze orange, acid green, electric blue, tournament white: a shader repaints your character's shirt colour, keyed per character in `Roster.CHARACTERS`), a pair of sweatbands, colours including four neons, and paddle colourways. Looks only. Real-money purchases would need the App Store / Play billing plugins; the coin economy is ready for that.
 
-There are 21 **achievements** (Stats → Achievements).
+There are 25 **achievements** (Stats → Achievements).
 
 **Game Center (iOS).** The game signs in at launch, reports achievements and posts three leaderboards: `daily_best`, `longest_rally` and `online_rating` (`scripts/game_services.gd`). Stats has a Game Center button for the dashboard once signed in. It uses [GodotApplePlugins](https://github.com/xibbon/GodotApplePlugins) (GameCenter + Runtime), which the Codemagic iOS build downloads at a pinned release because it's ~300 MB; everything is looked up by name, so the editor, desktop and Android builds run without it. Needs iOS 17+ and `entitlements/game_center` (both set in `export_presets.cfg`). In App Store Connect → the app → Game Center, create each achievement with the same id as `Awards.list()`, and the three leaderboards as "Classic, best score, high to low". Google Play Games is a later step (`report()` already calls it if its plugin is present).
 
@@ -191,7 +199,7 @@ godot --headless --path . --fixed-fps 60 -- --autoplay --quit-after=600   # AI v
 godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot taps HIT as you
 --mode=quick|set|match|practice                                           # skip the menu
 --career=club|regional|national|world  --daily                             # career match / daily challenge
---mash-kind=chiquita|vibora|contrapared                                   # the test bot plays that shot
+--mash-kind=chiquita|vibora|contrapared|dejada|globo|por_cuatro                                # the test bot plays that shot
 --games=N                                                                 # shorter quick matches (for tests)
 --court=ID                                                                # quick play on a venue (e.g. rooftop)
 --online-create=quick --room=4                                            # doubles room (join with --online-join=CODE)
@@ -200,7 +208,7 @@ godot --headless --path . --fixed-fps 60 -- --mash --quit-after=600       # bot 
 --aim-test                                                                # show the aim crosshair as if HIT were held
 --screen=career|team|locker|settings|stats|training                       # open a menu screen
 --relay=ws://127.0.0.1:8080 --online-quick                                # online test (run two copies)
---drill=ground|aim|slice|glass|volley|smash|walls|mix                         # start a training drill
+--drill=ground|aim|slice|glass|volley|smash|walls|dejada|globo|por_cuatro|mix                         # start a training drill
 godot --path . -s tools/pose_test.gd -- out                               # render the player rig in poses
 --trace                                                                   # print every shot
 --screenshot=out.png@8                                                    # save a frame (needs a renderer)

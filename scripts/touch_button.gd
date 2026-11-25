@@ -5,6 +5,7 @@ extends Control
 ## A plain tap gives Vector2.ZERO.
 
 signal released(aim: Vector2)
+signal swiped(aim: Vector2)   # fire_on_press buttons: a swipe before letting go
 signal pressed_down
 
 const SWIPE := 110.0
@@ -90,6 +91,8 @@ func _input(event: InputEvent) -> void:
 				aim = Vector2.ZERO
 			if not fire_on_press:
 				released.emit(aim)
+			elif aim != Vector2.ZERO:
+				swiped.emit(aim)
 			get_viewport().set_input_as_handled()
 	elif event is InputEventScreenDrag:
 		var dr := event as InputEventScreenDrag

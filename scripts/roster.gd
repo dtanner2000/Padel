@@ -128,6 +128,12 @@ const SHOTS := {
 		"how": "Swipe HIT down: a soft dipping ball at the feet of players at the net."},
 	"contrapared": {"name": "Contrapared", "unlock": "national",
 		"how": "Beaten by a deep ball? Tap HIT as it passes you to play it into your own back glass and over the net."},
+	"dejada": {"name": "Dejada", "unlock": "club",
+		"how": "At the net, swipe HIT down: a feathered drop shot that dies just over the net."},
+	"globo": {"name": "Globo", "unlock": "regional",
+		"how": "Tap LOB with good timing when they're at the net: a high, deep lob that sends them back."},
+	"por_cuatro": {"name": "Por cuatro", "unlock": "world",
+		"how": "Hold the stick sideways and tap SMASH when it's charged: the ball kicks out over the side wall."},
 }
 
 

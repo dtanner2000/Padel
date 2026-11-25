@@ -26,6 +26,10 @@ static func list() -> Array:
 		["drills_all", "Student of the game", "Complete every training drill", func(c: Dictionary) -> bool: return c.get("drills", 0) >= c.get("drills_total", 99)],
 		["daily_5", "On target", "Score 5 in a daily challenge", func(_c: Dictionary) -> bool: return Profile.stat("daily_best") >= 5],
 		["daily_10", "Sharpshooter", "Score 10 in a daily challenge", func(_c: Dictionary) -> bool: return Profile.stat("daily_best") >= 10],
+		["dejada_10", "Feather touch", "Hit 10 dejadas", func(_c: Dictionary) -> bool: return Profile.stat("dejada") >= 10],
+		["globo_10", "Over the top", "Hit 10 globos", func(_c: Dictionary) -> bool: return Profile.stat("globo") >= 10],
+		["por_cuatro_1", "Por cuatro", "Smash one out over the side wall", func(_c: Dictionary) -> bool: return Profile.stat("por_cuatro") >= 1],
+		["combo_5", "Better together", "Finish 5 partner combos", func(_c: Dictionary) -> bool: return Profile.stat("combos") >= 5],
 		["online_win", "Worldwide", "Win an online match", func(_c: Dictionary) -> bool: return Profile.stat("online_wins") >= 1],
 		["gold_tier", "Gold", "Reach Gold online (1150)", func(_c: Dictionary) -> bool: return Profile.rating() >= 1150],
 		["maxed", "Maxed out", "Take any skill to level 5", func(_c: Dictionary) -> bool:

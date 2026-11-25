@@ -31,6 +31,7 @@ const MOVE_ASSIST := 0.75           # auto-move towards your ball when the stick
 const DEAD_BALL_TIME := 8.0
 const CHARGE_HITS := 12.0           # SMASH charges over ~10-12 hits (perfect timing counts double)
 const SHOT_SPIN := {"slice": -1.0, "lob": -0.2, "drive": 0.15, "smash": 0.1, "power_smash": 0.6,
+	"por_cuatro": 1.6, "dejada": -1.0, "globo": 0.35, "combo": 0.15,
 	"vibora": -0.9, "chiquita": -0.6, "contrapared": 0.0}
 
 ## Training drills. z = where you stand (your half), goal 0 = endless.
@@ -47,6 +48,12 @@ const DRILL_INFO := {
 		"tip": "At the net: hit it before it bounces.\nShort, early swings."},
 	"smash": {"name": "Power smash", "goal": 3, "z": 4.2,
 		"tip": "Every hit charges SMASH. When it glows and the ball is high,\ntap SMASH to send it out of the court."},
+	"dejada": {"name": "Dejada", "goal": 4, "z": 3.0, "shot": "dejada",
+		"tip": "At the net, swipe HIT down.\nA feathered drop that dies just over the net."},
+	"globo": {"name": "Globo", "goal": 4, "z": 7.4, "shot": "globo",
+		"tip": "Tap LOB with good timing (the ring full).\nLand it in the last two metres."},
+	"por_cuatro": {"name": "Por cuatro", "goal": 3, "z": 4.2, "shot": "por_cuatro",
+		"tip": "SMASH is charged. Hold the stick left or right and tap SMASH\non the high ball: out over the side wall."},
 	"walls": {"name": "Glass targets", "goal": 5, "z": 7.4,
 		"tip": "Land it deep so it bounces up into the lit panel.\nOff the bounce only: glass on the full is out."},
 	"mix": {"name": "Free practice", "goal": 0, "z": 7.4,
@@ -79,6 +86,7 @@ class Pad:
 	var held_fired := false   # HIT fired while held: ignore the release that follows
 	var mirror := 1.0
 	var touch := true          # held input comes from the touch HIT button (so flicks mean slice)
+	var side := 0.0            # SMASH swiped sideways: por cuatro to that side (world x sign)
 
 	func world_move() -> Vector3:
 		var m := move.limit_length(1.0)
@@ -161,6 +169,11 @@ var _replay_cam_side := 1.0
 var _since_replay := 99            # points since the last replay (long rallies wait their turn)
 var _rec_total := 0                # frames ever recorded this point
 var _last_hit_at := 0              # _rec_total when the ball was last struck
+var combo := 0.0                   # partner combo meter, 0..1 (offline matches)
+var combo_armed := false           # COMBO tapped: your next shot is the team's winner
+const COMBO_HITS := 34.0
+var _celeb_five := false           # the combo's point: the pair high-five
+var _last_together := false        # the combo shot is in play this point
 var _choice_default := Callable()  # what HIT does while the end-of-match buttons are up
 var _celeb_team := -1              # team to celebrate once any replay has played
 var _celeb_match := false
@@ -586,6 +599,53 @@ func _solve_contrapared(from: Vector3, aim: Vector2, s: float) -> Vector3:
 	return best
 
 
+## Por cuatro: a smash whose topspin kick takes it out over the side wall.
+## Searched with the real ball physics (as the contrapared is): a landing spot
+## on their half from which the bounce carries out sideways, preferring the
+## side the stick points to. null if nothing works from here.
+func _solve_por_cuatro(from: Vector3, aim: Vector2, s: float) -> Variant:
+	var want := signf(aim.x) if absf(aim.x) > 0.1 else (1.0 if from.x <= 0.0 else -1.0)
+	var fallback: Variant = null
+	for lx in [1.5, 2.5, 0.5, 3.5, -0.5, -1.5]:
+		for lz in [1.8, 1.2, 2.4, 3.0, 3.6]:
+			for spd in [26.0, 22.0, 30.0]:
+				var v := Shot.solve(from, Vector3(want * lx, Ball.RADIUS, -s * lz), spd, 0.05)
+				var sim := BallSim.new()
+				sim.pos = from
+				sim.vel = v
+				sim.spin = SHOT_SPIN.por_cuatro
+				var bounces := 0
+				var exit_x := 0.0
+				for i in 480:
+					var stop := false
+					for e in sim.step(1.0 / 120.0):
+						if e[0] == "floor":
+							bounces += 1
+							if bounces > 1 or Court.side_of(e[1].z) == (0 if s > 0.0 else 1):
+								stop = true
+						elif e[0] == "net" or (e[0] == "wall" and absf(e[1].z) > Court.HALF_L - 0.2):
+							stop = true
+						elif e[0] == "out":
+							if bounces == 1 and absf(e[1].x) > Court.HALF_W:
+								exit_x = e[1].x
+							stop = true
+					if stop:
+						break
+				if exit_x != 0.0:
+					if signf(exit_x) == want:
+						return v
+					if fallback == null:
+						fallback = v
+	return fallback
+
+
+func _rivals_at_net(team: int) -> bool:
+	for o in _team(1 - team):
+		if o.visible and absf(o.position.z) < 5.2:
+			return true
+	return false
+
+
 func _style(p: Player) -> String:
 	return p.style if net_role == "" else ""
 
@@ -827,6 +887,8 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 	streak = 0
 	feeds = 0
 	drill_done = 0
+	combo = 0.0
+	combo_armed = false
 	for p in players:
 		p.visible = p.is_human or not practice
 		p.smash_charge = 0.0
@@ -1612,6 +1674,7 @@ func _start_point() -> void:
 	_last_hit_at = 0
 	_celeb_team = -1
 	_celeb_cam = -1
+	_celeb_five = false
 	_orbit_t = -1.0
 	_choice_default = Callable()
 	hud.show_choices([])
@@ -1641,7 +1704,7 @@ func _start_point() -> void:
 		h.position = Vector3(0, 0, DRILL_INFO[d].z)
 		h.vel = Vector3.ZERO
 		h.face_net()
-		if d == "smash":
+		if d in ["smash", "por_cuatro"]:
 			h.smash_charge = 1.0
 		ball.live = false
 		ball.place(machine.position + Vector3(0, 1.0, 0.4))
@@ -1749,7 +1812,7 @@ func _maybe_replay(team: int, reason: String) -> void:
 	if not Profile.replays() or net_role != "" or _ai_human() or practice or _rec.size() < 30:
 		return
 	_since_replay += 1
-	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita"] and team == last_hitter_team
+	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
 	var epic := (rally_hits >= 20 or reason == "Out of the court!") and _since_replay >= 4
 	if special or epic:
 		_since_replay = 0
@@ -1834,7 +1897,7 @@ func _start_celebration() -> void:
 		if side == 0.0:
 			side = 1.0 if i % 2 == 0 else -1.0
 		var meet: Variant = Vector3(mid.x + side * 0.5, 0.0, mid.z) if together else null
-		if _celeb_match and together:
+		if (_celeb_match or _celeb_five) and together:
 			p.celebrate("five", mid, meet)
 		else:
 			p.celebrate("jump" if randf() < 0.5 else "pump", null, meet)
@@ -1943,14 +2006,14 @@ func _feed() -> void:
 	match kind:
 		"glass":
 			ball.velocity = Shot.solve(from, Vector3(randf_range(-3.0, 3.0), r, 8.9), 15.5, 0.4)
-		"smash":
+		"smash", "por_cuatro":
 			ball.velocity = Shot.launch_velocity(from, Vector3(randf_range(-2.5, 2.5), r, randf_range(5.0, 6.5)), 1.75)
 		"vibora":
 			ball.velocity = Shot.launch_velocity(from, Vector3(randf_range(-2.5, 2.5), r, randf_range(5.6, 6.8)), 1.6)
 		"contrapared":
 			# a deep lob that bounces just in front of you and runs on to the glass
 			ball.velocity = Shot.launch_velocity(from, Vector3(randf_range(-2.0, 2.0), r, randf_range(6.6, 7.2)), 1.85)
-		"volley":
+		"volley", "dejada":
 			# flat and quick, passing the net player at chest height
 			ball.velocity = Shot.solve(from, Vector3(randf_range(-2.2, 2.2), r, randf_range(5.6, 6.6)), 13.0, 0.5)
 		_:
@@ -2034,6 +2097,15 @@ func _practice_judge(pos: Vector3, landed: bool) -> void:
 		"contrapared":
 			ok = landed and last_shot_kind == "contrapared"
 			why = "Contrapared!" if ok else "In, now let it pass you first"
+		"dejada":
+			ok = landed and last_shot_kind == "dejada" and absf(pos.z) < 3.2
+			why = "Dejada!" if ok else ("In, now swipe down at the net" if last_shot_kind != "dejada" else "Too deep: softer")
+		"globo":
+			ok = landed and last_shot_kind == "globo" and absf(pos.z) > 8.0
+			why = "Globo!" if ok else ("In, now tap LOB with the ring full" if last_shot_kind != "globo" else "Short: they'd smash that")
+		"por_cuatro":
+			ok = not landed and last_shot_kind == "por_cuatro" and absf(pos.x) > Court.HALF_W
+			why = "Por cuatro! Over the side wall" if ok else ("In, now hold the stick sideways and tap SMASH" if landed else "Out the back: that's por tres")
 	_practice_result(ok, why)
 
 
@@ -2084,10 +2156,14 @@ func _award(team: int, reason: String) -> void:
 	sfx.crowd(big)
 	scenery.cheer(1.0 if big else 0.4)
 	_maybe_replay(team, reason)
-	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita"] and team == last_hitter_team
+	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
 	if special or res in ["set", "match"] or (reason == "Out of the court!" and team == last_hitter_team):
 		_celeb_team = team
 		_celeb_match = res == "match"
+	_celeb_five = _last_together and team == 0
+	_last_together = false
+	if team == 0 and net_role == "" and not _ai_human() and not combo_armed:
+		combo = minf(1.0, combo + 3.0 / COMBO_HITS)
 	var mine := _my_team()
 	var counted := not _ai_human()
 	if counted:
@@ -2181,6 +2257,14 @@ func _on_floor(pos: Vector3) -> void:
 			_award(last_hitter_team, "Came back over!")
 		else:
 			_award(1 - last_hitter_team, "Into the net")
+		return
+	if practice and last_hitter_team == 0 and not challenge and _drill() == "por_cuatro" and last_shot_kind == "por_cuatro":
+		# it has to bounce first, then kick out over the side
+		receiver_bounces += 1
+		if receiver_bounces >= 2:
+			_practice_result(false, "Stayed in: hit it harder and wider")
+		else:
+			_refresh_prediction()
 		return
 	if practice and last_hitter_team == 0 and not challenge and _drill() == "walls":
 		receiver_bounces += 1
@@ -2335,8 +2419,19 @@ func _physics_process(delta: float) -> void:
 		print("saved ", shot_path)
 	if mash_kind == "contrapared" and state == State.RALLY and _contrapared_ball(_human()) and _can_hit(_human()):
 		_on_shot_requested("drive", Vector2(randf_range(-1, 1), 0.3))
+	elif mash_kind == "por_cuatro" and Engine.get_physics_frames() % 15 == 0:
+		_on_shot_requested("smash", Vector2.ZERO)
+		_on_shot_requested("smash_side", Vector2(1.0, 0.0))
+	elif mash_kind == "dejada" and Engine.get_physics_frames() % 15 == 0:
+		_on_shot_requested("chiquita", Vector2(0.0, -1.0))
+	elif mash_kind == "globo" and Engine.get_physics_frames() % 15 == 0:
+		_on_shot_requested("lob", Vector2(0.0, 0.3))
 	elif mash_kind in ["chiquita", "vibora"] and Engine.get_physics_frames() % 15 == 0:
 		_on_shot_requested("chiquita" if mash_kind == "chiquita" else "slice", Vector2(randf_range(-0.4, 0.4), -1.0) if mash_kind == "chiquita" else Vector2(1.0, 0.0))
+	elif mash and mash_kind == "" and combo >= 1.0 and state == State.RALLY:
+		_on_shot_requested("combo", Vector2.ZERO)
+		if quit_after > 0.0:
+			print("[combo] armed at t=%.1f" % elapsed)
 	elif mash and mash_kind == "" and Engine.get_physics_frames() % 15 == 0:
 		var a := Vector2(randf_range(-1, 1), randf_range(-0.5, 0.8))
 		_on_shot_requested("smash" if randf() < 0.15 else Hud.swipe_kind(a), a)
@@ -2609,13 +2704,21 @@ func _ai_hit(p: Player) -> void:
 	for o in _team(1 - p.team):
 		if absf(o.position.z) > 5.2:
 			opp_at_net = false
+	var opp_deep := true
+	for o in _team(1 - p.team):
+		if absf(o.position.z) < 7.0:
+			opp_deep = false
 	var st := _style(p)
-	if bp.y > 2.0:
+	if bp.y > 2.6 and absf(bp.z) < 5.0 and randf() < (0.12 if st == "Power" else 0.04):
+		kind = "por_cuatro"
+	elif bp.y > 2.0:
 		kind = "smash" if absf(bp.z) < 6.0 and randf() < (0.8 if st == "Power" else 0.55) else ("vibora" if randf() < 0.4 else "bandeja")
+	elif opp_deep and absf(p.position.z) < 4.6 and bp.y < 1.6 and randf() < (0.3 if st == "Touch" else 0.12):
+		kind = "dejada"
 	elif opp_at_net and bp.y < 1.2 and randf() < (0.35 if st == "Touch" else 0.15):
 		kind = "chiquita"
 	elif opp_at_net and randf() < (0.55 if st == "Touch" else 0.4):
-		kind = "lob"
+		kind = "globo" if randf() < 0.3 else "lob"
 	elif absf(p.position.z) > 7.5 and randf() < (0.28 if st == "Touch" else 0.18):
 		kind = "lob"   # defensive lob from the back
 	elif receiver_bounces >= 1 and bp.y < 1.15 and randf() < (0.5 if st == "Touch" else 0.3):
@@ -2695,6 +2798,14 @@ func _on_hit_pressed() -> void:
 
 
 func _on_shot_requested(kind: String, aim: Vector2) -> void:
+	if kind == "combo":
+		if combo >= 1.0 and not combo_armed and net_role == "" and state in [State.RALLY, State.SERVE_WAIT]:
+			combo = 0.0
+			combo_armed = true
+			hud.callout("%s: \"Together! Next one's yours!\"" % players[1].display_name, 1.6)
+			sfx.ui("ding", -4.0)
+			Profile.vibrate(40)
+		return
 	if _replay_t >= 0.0:
 		_end_replay()
 		state_timer = minf(state_timer, 0.4)
@@ -2739,6 +2850,17 @@ func _pad_pressed(pad: Pad, p: Player) -> void:
 
 
 func _pad_shot(pad: Pad, kind: String, aim: Vector2) -> void:
+	if kind == "smash_side":
+		# SMASH, then a sideways swipe before letting go: por cuatro that way
+		if absf(aim.x) < 0.4:
+			return
+		pad.side = signf(pad.world_aim(aim).x)
+		if pad.kind != "smash" or pad.buffer <= 0.0:
+			pad.kind = "smash"
+			pad.buffer = BUFFER_TIME
+		return
+	if kind == "smash":
+		pad.side = 0.0
 	if kind == "drive" and pad.held_fired:
 		pad.held_fired = false   # this release belongs to a shot already played
 		return
@@ -2777,11 +2899,19 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		var bp := ball.sim.pos
 		var kind := pad.kind
 		if kind == "smash":
-			# SMASH only fires charged and with the ball high; otherwise a normal shot
+			# SMASH only fires charged and with the ball high; otherwise a normal shot.
+			# With the stick held sideways it's a por cuatro (out over the side wall).
 			if p.smash_charge >= 1.0 and bp.y > 1.6:
-				kind = "power_smash"
+				var side := pad.side if pad.side != 0.0 else (signf(pad.world_move().x) if absf(pad.world_move().x) > 0.55 else 0.0)
+				if side != 0.0 and _shot_ok(p, "por_cuatro"):
+					kind = "por_cuatro"
+					pad.aim = Vector2(side * pad.mirror, 0.0)   # world_aim() turns it back into world x
+				else:
+					kind = "power_smash"
 			else:
 				kind = "bandeja" if bp.y > 2.0 else "drive"
+		elif kind == "chiquita" and bp.y < 2.0 and absf(p.position.z) < 4.6 and _shot_ok(p, "dejada"):
+			kind = "dejada"   # swipe down at the net: a drop shot
 		elif _contrapared_ball(p) and _shot_ok(p, "contrapared"):
 			kind = "contrapared"
 		elif kind == "slice" and bp.y > 2.0 and _shot_ok(p, "vibora"):
@@ -2793,22 +2923,39 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		elif kind == "lob" and bp.y > 2.0:
 			kind = "bandeja"
 		var q := _timing_quality(p)
+		if kind == "lob" and q >= 0.7 and _shot_ok(p, "globo") and (practice or _rivals_at_net(p.team)):
+			kind = "globo"
+		var together := combo_armed and p == _human() and net_role == ""
+		if together:
+			# the partner combo: your partner set it up, you finish it
+			combo_armed = false
+			kind = "por_cuatro" if bp.y > 1.6 and _shot_ok(p, "por_cuatro") else ("power_smash" if bp.y > 1.6 else "combo")
+			q = 1.0
 		var glass := wall_since_bounce
 		pad.buffer = 0.0
+		pad.side = 0.0
 		pad.held_fired = held
 		var miss := maxf(0.0, (0.7 - q) * 0.6) + _difficulty(p) * 0.12
-		if kind == "power_smash":
+		if kind in ["power_smash", "por_cuatro"]:
 			miss *= 0.5
+		if together:
+			miss = 0.0
 		_do_hit(p, kind, pad.world_aim(pad.aim), q, miss)
 		var was_full := p.smash_charge >= 1.0
-		if kind == "power_smash":
+		_last_together = together
+		if together:
+			for o in _team(1 - p.team):
+				o.react = 2.2          # wrong-footed: they don't move until it's past them
+		if kind in ["power_smash", "por_cuatro"] and not together:
 			p.smash_charge = 0.0
 		else:
 			p.smash_charge = minf(1.0, p.smash_charge + (2.0 if q > 0.85 else 1.0) / CHARGE_HITS * (1.0 + _kit(p).charge))
 		var fx := ""
-		if kind == "power_smash":
+		if together:
+			fx = "TOGETHER!"
+		elif kind == "power_smash":
 			fx = "POWER SMASH!"
-		elif kind in ["vibora", "chiquita", "contrapared"]:
+		elif kind in Roster.SHOTS:
 			fx = Roster.SHOTS[kind].name.to_upper() + "!"
 		elif not was_full and p.smash_charge >= 1.0:
 			fx = "SMASH READY!"
@@ -2827,8 +2974,10 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 				Profile.add_stat("bajadas")
 			if kind == "slice":
 				Profile.add_stat("slices")
-			if kind in ["vibora", "chiquita", "contrapared"]:
+			if kind in Roster.SHOTS:
 				Profile.add_stat(kind)
+			if together:
+				Profile.add_stat("combos")
 			if q > 0.85:
 				Profile.add_stat("perfect")
 		var ms := 60 if q > 0.85 else 25
@@ -2867,11 +3016,16 @@ func _update_hud() -> void:
 		hud.hit_btn.readiness = 0.0
 		hud.smash_btn.enabled = false
 		hud.smash_btn.charge = 0.0
+		hud.combo_btn.visible = false
 		return
 	var r := _readiness(_human())
 	hud.hit_btn.readiness = r[0]
 	hud.smash_btn.charge = r[1]
 	hud.smash_btn.enabled = r[1] >= 1.0
+	var show_combo := net_role == "" and not practice and players[1].visible
+	hud.combo_btn.visible = show_combo
+	hud.combo_btn.charge = 1.0 if combo_armed else combo
+	hud.combo_btn.enabled = combo >= 1.0 and not combo_armed
 
 
 # --- shots ----------------------------------------------------------------------
@@ -2888,7 +3042,7 @@ func _shot_target(kind: String, aim: Vector2, s: float, q: float) -> Array:
 			to = Vector3(aim.x * 3.5, r, -s * lerpf(3.0, 6.0, depth))
 			speed = lerpf(20.0, 27.0, q)
 			clear = 0.1
-		"power_smash":
+		"power_smash", "por_cuatro":
 			# lands near the service line with topspin: kicks up and over the back wall
 			to = Vector3(aim.x * 3.0, r, -s * lerpf(2.8, 4.4, depth))
 			speed = lerpf(26.0, 32.0, q)
@@ -2914,6 +3068,19 @@ func _shot_target(kind: String, aim: Vector2, s: float, q: float) -> Array:
 			clear = 0.06
 		"lob":
 			to = Vector3(aim.x * 3.5, r, -s * lerpf(8.0, 9.3, depth))
+		"globo":
+			to = Vector3(aim.x * 3.0, r, -s * lerpf(8.4, 9.2, depth))
+		"dejada":
+			# feathered just over the net with heavy backspin: it dies
+			to = Vector3(aim.x * 3.2, r, -s * lerpf(1.0, 2.0, depth * 0.6))
+			speed = lerpf(6.5, 7.6, q)
+			clear = 0.16
+		"combo":
+			# into the open corner, hard and deep
+			var side := signf(aim.x) if absf(aim.x) > 0.15 else (1.0 if randf() < 0.5 else -1.0)
+			to = Vector3(side * 3.5, r, -s * 7.4)
+			speed = 19.0
+			clear = 0.22
 		_:
 			to = Vector3(aim.x * 3.8, r, -s * lerpf(3.0, 8.6, depth))
 			speed = lerpf(10.0, 18.0, q * 0.6 + depth * 0.4)
@@ -2950,6 +3117,11 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 		ball.velocity = Shot.solve(from, to, speed + 4.0, 0.3)
 	elif kind == "lob":
 		ball.velocity = Shot.launch_velocity(from, to, lerpf(1.7, 2.1, depth))
+	elif kind == "globo":
+		ball.velocity = Shot.launch_velocity(from, to, lerpf(2.25, 2.5, depth))
+	elif kind == "por_cuatro":
+		var v4: Variant = _solve_por_cuatro(from, aim, s)
+		ball.velocity = v4 if v4 != null else Shot.solve(from, to, speed, clear)
 	elif kind == "contrapared":
 		ball.velocity = _solve_contrapared(from, aim, s)
 	else:
@@ -2975,6 +3147,10 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 	last_callout = [null, null]
 	for o in _team(1 - p.team):
 		o.react = randf_range(0.1, 0.3) * (1.3 - o.skill)
+		if kind == "globo" and absf(o.position.z) < 5.2:
+			o.react += 0.35          # caught at the net: turn and run
+	if p.team == 0 and net_role == "" and not practice and not _ai_human() and not combo_armed:
+		combo = minf(1.0, combo + (2.0 if q > 0.85 else 1.0) / COMBO_HITS)
 	_set_rally(rally_hits)
 	_refresh_prediction()
 

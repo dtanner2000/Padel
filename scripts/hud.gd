@@ -41,7 +41,8 @@ const TRAINING := [
 	["ground", "Groundstrokes"], ["aim", "Aiming"], ["slice", "Slice"],
 	["glass", "Off the back glass"], ["volley", "Volleys at the net"], ["smash", "Power smash"],
 	["vibora", "Víbora"], ["chiquita", "Chiquita"], ["contrapared", "Contrapared"],
-	["walls", "Glass targets"], ["mix", "Free practice"],
+	["walls", "Glass targets"], ["dejada", "Dejada"], ["globo", "Globo"], ["por_cuatro", "Por cuatro"],
+	["mix", "Free practice"],
 ]
 
 
@@ -62,6 +63,7 @@ var joystick: TouchJoystick
 var hit_btn: TouchButton
 var lob_btn: TouchButton
 var smash_btn: TouchButton
+var combo_btn: TouchButton   # partner combo: fills with good rallies (offline)
 var pause_btn: Button
 
 var _score_panel: PanelContainer
@@ -184,7 +186,19 @@ func _ready() -> void:
 	smash_btn.charge = 0.0
 	smash_btn.fire_on_press = true
 	smash_btn.released.connect(func(aim: Vector2) -> void: shot_requested.emit("smash", aim))
+	smash_btn.swiped.connect(func(aim: Vector2) -> void: shot_requested.emit("smash_side", aim))   # por cuatro
 	controls.add_child(smash_btn)
+
+	combo_btn = TouchButton.new()
+	combo_btn.radius = 30
+	combo_btn.label = "COMBO"
+	combo_btn.font_size = 13
+	combo_btn.enabled = false
+	combo_btn.charge = 0.0
+	combo_btn.fire_on_press = true
+	combo_btn.visible = false
+	combo_btn.released.connect(func(_aim: Vector2) -> void: shot_requested.emit("combo", Vector2.ZERO))
+	controls.add_child(combo_btn)
 
 	_build_menu()
 	_build_online()
@@ -282,13 +296,13 @@ func show_training(on: bool, info := {}) -> void:
 			sub = "Locked · win %s" % Roster.venue(Roster.SHOTS[id].unlock).name
 		var b := _button("%s\n%s" % [d[1], sub if sub != "" else "Not tried yet"], 15,
 			LIME if sub.begins_with("✓") else (Color(1, 1, 1, 0.14) if locked else Color(1, 1, 1, 0.94)), MUTED if locked else INK)
-		b.custom_minimum_size = Vector2(300, 50)
+		b.custom_minimum_size = Vector2(272, 50)
 		b.disabled = locked
 		b.pressed.connect(func() -> void:
 			_training.visible = false
 			training_chosen.emit(id))
 		_training_grid.add_child(b)
-	_training_grid.columns = 3
+	_training_grid.columns = 4
 
 
 func _build_training() -> void:
@@ -1347,6 +1361,8 @@ func _layout() -> void:
 	_place(hit_btn, Vector2(mx.call(w - 70 * k), h - 70 * k), 72 * k)
 	_place(lob_btn, Vector2(mx.call(w - 185 * k), h - 38 * k), 48 * k)
 	_place(smash_btn, Vector2(mx.call(w - 60 * k), h - 195 * k), 48 * k)
+	combo_btn.radius = 30 * k
+	_place(combo_btn, Vector2(mx.call(w - 180 * k), h - 165 * k), 45 * k)
 	pause_btn.position = Vector2(w - pause_btn.size.x if lefty else 0.0, 0)
 	_layout_message()
 
