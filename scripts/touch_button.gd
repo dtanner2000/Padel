@@ -23,6 +23,7 @@ var enabled := true:
 		if v != enabled:
 			enabled = v
 			queue_redraw()
+var touch_when_disabled := false   # SMASH: dimmed until charged, but a press still plays a shot
 var readiness := -1.0:   # 0..1 draws the timing arc; < 0 hides it
 	set(v):
 		if not is_equal_approx(v, readiness):
@@ -72,7 +73,7 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var t := event as InputEventScreenTouch
 		if t.pressed:
-			if _touch == -1 and enabled and t.position.distance_to(centre_global()) <= radius * 1.25:
+			if _touch == -1 and (enabled or touch_when_disabled) and t.position.distance_to(centre_global()) <= maxf(radius * 1.3, radius + 16.0):
 				_touch = t.index
 				_start = t.position
 				_drag = Vector2.ZERO

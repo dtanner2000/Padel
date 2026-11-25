@@ -182,18 +182,19 @@ func _ready() -> void:
 	controls.add_child(hit_btn)
 
 	lob_btn = TouchButton.new()
-	lob_btn.radius = 32
+	lob_btn.radius = 40
 	lob_btn.label = "LOB"
-	lob_btn.font_size = 17
+	lob_btn.font_size = 19
 	lob_btn.fire_on_press = true
 	lob_btn.released.connect(func(aim: Vector2) -> void: shot_requested.emit("lob", aim))
 	controls.add_child(lob_btn)
 
 	smash_btn = TouchButton.new()
-	smash_btn.radius = 32
+	smash_btn.radius = 36
 	smash_btn.label = "SMASH"
 	smash_btn.font_size = 15
 	smash_btn.enabled = false
+	smash_btn.touch_when_disabled = true   # uncharged: an ordinary overhead, never a dead button
 	smash_btn.charge = 0.0
 	smash_btn.fire_on_press = true
 	smash_btn.released.connect(func(aim: Vector2) -> void: shot_requested.emit("smash", aim))
@@ -1367,13 +1368,13 @@ func _layout() -> void:
 	joystick.rest_centre = Vector2(joystick.size.x - 80 if lefty else 80.0, joystick.size.y - 80)
 	var mx := func(x: float) -> float: return w - x if lefty else x
 	hit_btn.radius = 50 * k
-	lob_btn.radius = 32 * k
-	smash_btn.radius = 32 * k
+	lob_btn.radius = 40 * k      # bigger and up off the screen edge: it was easy to miss
+	smash_btn.radius = 36 * k
 	_place(hit_btn, Vector2(mx.call(w - 70 * k), h - 70 * k), 72 * k)
-	_place(lob_btn, Vector2(mx.call(w - 185 * k), h - 38 * k), 48 * k)
-	_place(smash_btn, Vector2(mx.call(w - 60 * k), h - 195 * k), 48 * k)
-	combo_btn.radius = 30 * k
-	_place(combo_btn, Vector2(mx.call(w - 180 * k), h - 165 * k), 45 * k)
+	_place(lob_btn, Vector2(mx.call(w - 196 * k), h - 56 * k), 60 * k)
+	_place(smash_btn, Vector2(mx.call(w - 62 * k), h - 198 * k), 54 * k)
+	combo_btn.radius = 32 * k
+	_place(combo_btn, Vector2(mx.call(w - 190 * k), h - 172 * k), 48 * k)
 	pause_btn.position = Vector2(w - pause_btn.size.x if lefty else 0.0, 0)
 	_layout_message()
 
