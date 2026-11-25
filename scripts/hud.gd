@@ -1035,6 +1035,11 @@ func show_settings(on: bool) -> void:
 			store.restore())
 	shop.add_child(rest)
 	_settings_box.add_child(shop)
+	var ad_line := _label(Ads.status, 11, MUTED)
+	ad_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ad_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ad_line.custom_minimum_size = Vector2(520, 0)
+	_settings_box.add_child(ad_line)
 	if _store_msg != "":
 		var sm := _label(_store_msg, 13, LIME)
 		sm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

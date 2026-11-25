@@ -21,6 +21,11 @@ const MATCHES_BETWEEN := 2         # an interstitial at most every 2nd finished 
 const MIN_GAP := 180.0             # and never within 3 minutes of the last one
 const FREE_MATCHES := 2            # nobody sees an ad in their first two matches
 
+## What the ads are doing, shown small in Settings so a real-ad build can be
+## checked on a phone without tapping an ad.
+static var status := "Ads: off on this device"
+static var loaded := {"inter": false, "reward": false}
+
 var _ready_sdk := false
 var _inter: InterstitialAd
 var _reward: RewardedAd
@@ -36,11 +41,15 @@ func _available() -> bool:
 
 func _ready() -> void:
 	if not _available():
+		status = "Ads: off (no AdMob plugin in this build)" if OS.get_name() in ["iOS", "Android"] else status
 		return
+	status = "Ads: checking consent…"
 	_inter_loader = InterstitialAdLoader.new()
 	_reward_loader = RewardedAdLoader.new()
 	var request := ConsentRequestParameters.new()
-	UserMessagingPlatform.consent_information.update(request, _consent_updated, func(_e: FormError) -> void: _start_sdk())
+	UserMessagingPlatform.consent_information.update(request, _consent_updated, func(e: FormError) -> void:
+		status = "Ads: consent check failed (%s), starting anyway" % _err(e)
+		_start_sdk())
 
 
 func _consent_updated() -> void:
@@ -60,8 +69,10 @@ func _start_sdk() -> void:
 	if _ready_sdk:
 		return
 	_ready_sdk = true
+	status = "Ads: starting%s" % (" (test ads)" if USE_TEST_ADS else "")
 	var listener := OnInitializationCompleteListener.new()
 	listener.on_initialization_complete = func(_s: InitializationStatus) -> void:
+		status = "Ads: loading…"
 		_load_interstitial()
 		_load_rewarded()
 	MobileAds.initialize(listener)
@@ -80,18 +91,42 @@ func _load_interstitial() -> void:
 	if Profile.owns("remove_ads"):
 		return
 	var cb := InterstitialAdLoadCallback.new()
-	cb.on_ad_loaded = func(ad: InterstitialAd) -> void: _inter = ad
-	cb.on_ad_failed_to_load = func(_e: LoadAdError) -> void:
+	cb.on_ad_loaded = func(ad: InterstitialAd) -> void:
+		_inter = ad
+		_loaded("inter", true, "")
+	cb.on_ad_failed_to_load = func(e: LoadAdError) -> void:
+		_loaded("inter", false, _err(e))
 		get_tree().create_timer(60.0).timeout.connect(_load_interstitial)
 	_inter_loader.load(_unit("inter"), AdRequest.new(), cb)
 
 
 func _load_rewarded() -> void:
 	var cb := RewardedAdLoadCallback.new()
-	cb.on_ad_loaded = func(ad: RewardedAd) -> void: _reward = ad
-	cb.on_ad_failed_to_load = func(_e: LoadAdError) -> void:
+	cb.on_ad_loaded = func(ad: RewardedAd) -> void:
+		_reward = ad
+		_loaded("reward", true, "")
+	cb.on_ad_failed_to_load = func(e: LoadAdError) -> void:
+		_loaded("reward", false, _err(e))
 		get_tree().create_timer(60.0).timeout.connect(_load_rewarded)
 	_reward_loader.load(_unit("reward"), AdRequest.new(), cb)
+
+
+func _loaded(kind: String, ok: bool, err: String) -> void:
+	loaded[kind] = ok
+	var parts := []
+	parts.append("between matches " + ("ready" if loaded.inter else "not loaded"))
+	parts.append("double coins " + ("ready" if loaded.reward else "not loaded"))
+	status = "Ads%s: %s" % [" (test)" if USE_TEST_ADS else "", ", ".join(parts)]
+	if err != "":
+		status += ". Last error: " + err + " (retrying every minute)"
+
+
+static func _err(e: Object) -> String:
+	if e == null:
+		return "unknown"
+	var code: Variant = e.get("code")
+	var msg: Variant = e.get("message")
+	return "%s %s" % [str(code) if code != null else "", str(msg) if msg != null else ""]
 
 
 ## A match just finished and the player is moving on: maybe show an
