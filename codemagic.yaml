@@ -120,8 +120,10 @@ workflows:
           # Apple needs a strictly increasing CFBundleVersion per upload.
           sed -i '' "s|^application/version=\"[^\"]*\"|application/version=\"$PROJECT_BUILD_NUMBER\"|" export_presets.cfg
           grep -E "^application/(version|short_version|bundle_identifier|app_store_team_id)=" export_presets.cfg
+          # (the first import also lets the AdMob plugin download its iOS binaries)
           "$GODOT" --headless --path . --import || true
           "$GODOT" --headless --path . --import || true
+          ls addons/admob/ios/bin/ads/libs || { echo "FATAL: AdMob iOS binaries missing"; exit 1; }
 
       - name: Godot export (Xcode project)
         script: |

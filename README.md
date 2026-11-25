@@ -6,6 +6,15 @@ First playable slice: a full doubles match against AI, with you and an AI partne
 
 Open the folder in **Godot 4.6** (4.4+ works) and press F5. On desktop, mouse clicks act as touches, and the keyboard works too.
 
+## Ads and Remove Ads
+
+- **AdMob** via the Poing Studios plugin (`addons/admob`, v5.1.0; its native iOS binaries are downloaded by the plugin on a headless import, so Codemagic fetches them itself). App ID is in Project Settings → `admob/general/ios/app_id`. `scripts/ads.gd`:
+  - Google's consent form (UMP) first, as UK/EU law requires; then the SDK starts.
+  - **Interstitial** only when you move on from a finished match (Play again / Next / Menu): at most every 2nd match, at least 3 minutes apart, never in your first two matches, never online, during a rally or in training, and never with Remove Ads.
+  - **Rewarded**: "▶ Double coins +N" on the end-of-match buttons, only when you earned coins; always optional (and still offered after Remove Ads).
+  - `USE_TEST_ADS = true` serves Google's test ads (AdMob bans clicking your own real ads). **Set it to false for the App Store release.** Android is off until it has its own App ID and ad units.
+- **Remove Ads**, £1.99 non-consumable `com.davidtanner.padel.removeads`, via StoreKit (`scripts/store.gd`): Settings → Remove ads / Restore purchases. Buying it also gives 500 coins. Owned purchases are re-checked at launch, so a reinstall or a new phone keeps it.
+
 ## Studio ident
 
 The Godot boot splash is off (a plain dark screen while the engine loads). Then `scripts/intro.gd` plays a 3-second **SOLO GAMES** ident: a padel ball arcs in, cracks off the logo (it jolts, a ring of light, the glass sound) and bounces away, then it fades to the menu. Tap to skip. It only plays on a normal launch (`--intro` forces it in test runs).

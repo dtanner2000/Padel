@@ -19,3 +19,8 @@ tools/gltf/node_modules/
 
 # fetched by the Codemagic iOS build (Game Center plugin)
 /addons/GodotApplePlugins*/
+
+# AdMob native binaries: the plugin downloads them on a headless import (Codemagic)
+/addons/admob/ios/bin/
+/addons/admob/android/bin/
+/addons/admob/downloads/

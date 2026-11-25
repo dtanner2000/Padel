@@ -161,6 +161,9 @@ var goal_frame: Node3D
 var sfx: Sfx
 var scenery: Scenery
 var menu_hero: MenuHero
+var ads: Ads
+var store: Store
+var _coins_start := 0              # coins at the start of this match (for "Double coins")
 var _my_paddle: Array = ["round", Color.BLACK, Color.BLACK]
 # replays: a ring buffer of every frame of the rally, played back slowly after big points
 const REC_SECONDS := 5.0
@@ -280,6 +283,15 @@ func _ready() -> void:
 	_make_machine()
 	hud = Hud.new()
 	add_child(hud)
+	ads = Ads.new()
+	add_child(ads)
+	store = Store.new()
+	add_child(store)
+	hud.store = store
+	store.changed.connect(func(text: String) -> void:
+		if Profile.owns("remove_ads"):
+			ads.ads_removed()
+		hud.store_status(text))
 	menu_hero = MenuHero.new()
 	add_child(menu_hero)
 	hud.set_hero(menu_hero)
@@ -947,6 +959,7 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 	feeds = 0
 	drill_done = 0
 	_just_started = true
+	_coins_start = Profile.coins()
 	combo = 0.0
 	combo_armed = false
 	for p in players:
@@ -1222,7 +1235,7 @@ func _challenge_result(goal: bool, reason: String) -> void:
 		sfx.crowd(ch_goals >= 5)
 		if new_best and ch_goals > 0:
 			sfx.ui("success", -3.0)
-		_offer([["Try again", _start_daily], ["Menu", _go_menu]])
+		_offer_match_end([["Try again", _start_daily], ["Menu", _go_menu]])
 		hud.show_message("%d goal%s%s\nToday's best %d  ·  all-time best %d" % [
 			ch_goals, "" if ch_goals == 1 else "s", "  NEW BEST!" if new_best and ch_goals > 0 else "", best, Profile.stat("daily_best")], 4.5)
 
@@ -2069,6 +2082,29 @@ func _offer(items: Array) -> void:
 	hud.show_choices(items)
 
 
+## After a match: the same buttons, but moving on may pass through an
+## interstitial first (ads.gd decides: at most every 2nd match, never in your
+## first two, never with Remove Ads). If a rewarded ad is loaded and you
+## earned coins, "Double coins" is offered too.
+func _offer_match_end(items: Array) -> void:
+	var wrapped: Array = []
+	for it in items:
+		var f: Callable = it[1]
+		wrapped.append([it[0], func() -> void: ads.between_matches(f)])
+	var earned := Profile.coins() - _coins_start
+	if earned > 0 and ads.rewarded_ready():
+		wrapped.insert(1, ["▶ Double coins +%d" % earned, func() -> void:
+			ads.show_rewarded(func() -> void:
+				Profile.add_stat("coins", earned)
+				Profile.save()
+				sfx.ui("success", -4.0)
+				hud.show_message("+%d coins!" % earned, 2.0),
+				func() -> void:
+					_coins_start = Profile.coins()   # once per match
+					_offer(wrapped.filter(func(w: Array) -> bool: return not String(w[0]).begins_with("▶"))))])
+	_offer(wrapped)
+
+
 ## Training: the drill's goal was reached. Next drill, keep going, or back.
 func _offer_after_drill() -> void:
 	var order: Array = []
@@ -2334,9 +2370,9 @@ func _award(team: int, reason: String) -> void:
 			get_tree().create_timer(3.0).timeout.connect(GameServices.maybe_ask_review)
 		if net_role == "" and counted:
 			if career_venue != "":
-				_offer(_career_choices(team == 0))
+				_offer_match_end(_career_choices(team == 0))
 			else:
-				_offer([["Play again", func() -> void: _on_mode_chosen(mode, score.golden_point)], ["Menu", _go_menu]])
+				_offer_match_end([["Play again", func() -> void: _on_mode_chosen(mode, score.golden_point)], ["Menu", _go_menu]])
 		if net_role == "host":
 			var h: Array = [Profile.rating(), 0]
 			var g: Array = [opp_rating, 0]

@@ -88,6 +88,8 @@ var _menu_shade: ColorRect
 var _hero_rect: TextureRect
 var _coins_badge: Label
 var _hero: MenuHero
+var store: Store                   # Remove Ads (main.gd sets it)
+var _store_msg := ""
 const FONT_DISPLAY := preload("res://assets/fonts/Anton-Regular.ttf")
 var _menu_buttons := {}        # mode id -> Button (subtitles get refreshed)
 var _pills := {}               # bottom-row pills on the menu
@@ -1011,7 +1013,38 @@ func show_settings(on: bool) -> void:
 				show_settings(true))
 			row.add_child(b)
 		grid.add_child(row)
+	# Remove Ads + Restore (Apple requires a restore button)
+	var shop := HBoxContainer.new()
+	shop.alignment = BoxContainer.ALIGNMENT_CENTER
+	shop.add_theme_constant_override("separation", 10)
+	var owned := Profile.owns("remove_ads")
+	var price := store.price if store and store.price != "" else "£1.99"
+	var buy := _button("✓ Ads removed" if owned else "Remove ads · %s" % price, 14, LIME if not owned else Color(1, 1, 1, 0.16), INK if not owned else Color.WHITE)
+	buy.custom_minimum_size = Vector2(220, 38)
+	buy.disabled = owned
+	buy.pressed.connect(func() -> void:
+		if store:
+			store.buy())
+	shop.add_child(buy)
+	var rest := _button("Restore purchases", 14, Color(1, 1, 1, 0.16), Color.WHITE)
+	rest.custom_minimum_size = Vector2(190, 38)
+	rest.pressed.connect(func() -> void:
+		if store:
+			store.restore())
+	shop.add_child(rest)
+	_settings_box.add_child(shop)
+	if _store_msg != "":
+		var sm := _label(_store_msg, 13, LIME)
+		sm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_settings_box.add_child(sm)
 	_open(_settings)
+
+
+## A line from the store (purchase done, restored, can't connect…).
+func store_status(text: String) -> void:
+	_store_msg = text
+	if _settings and _settings.visible:
+		show_settings(true)
 
 
 func _build_locker() -> void:
