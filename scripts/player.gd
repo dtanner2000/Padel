@@ -137,6 +137,8 @@ func _ready() -> void:
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.albedo_color = Color(1.0, 0.55, 0.16, 0.55) if team == 0 else Color(0.6, 0.45, 1.0, 0.55)
 	_ring.material_override = m
+	_ring_mat = m
+	_ring_col = m.albedo_color
 	_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_ring)
 
@@ -407,6 +409,28 @@ func celebrate(kind: String, face: Variant = null, meet: Variant = null) -> void
 
 
 var _face_pt: Variant = null
+var _ring_mat: StandardMaterial3D
+var _ring_col := Color.WHITE
+var _flash_t := 0.0
+
+
+## "This one's you": the ring at your feet pulses bright lime for a moment.
+func flash_ring(secs := 1.4) -> void:
+	_flash_t = secs
+
+
+func _tick_ring(delta: float) -> void:
+	if _ring_mat == null:
+		return
+	if _flash_t > 0.0:
+		_flash_t -= delta
+		var pulse := 0.5 + 0.5 * sin(_flash_t * 14.0)
+		_ring_mat.albedo_color = Color(0.78, 0.96, 0.2, 0.95).lerp(Color(1, 1, 1, 1), pulse * 0.6)
+		var sc := 1.0 + 0.35 * pulse * clampf(_flash_t / 0.3, 0.0, 1.0)
+		_ring.scale = Vector3(sc, 0.03, sc)
+	elif _ring.scale.x != 1.0:
+		_ring_mat.albedo_color = _ring_col
+		_ring.scale = Vector3(1, 0.03, 1)
 
 
 func _aim_face() -> void:
@@ -536,6 +560,7 @@ func swing(kind := "drive") -> void:
 func _process(delta: float) -> void:
 	if _body == null:
 		return
+	_tick_ring(delta)
 	if replaying:
 		if _skel:
 			_drive_model()

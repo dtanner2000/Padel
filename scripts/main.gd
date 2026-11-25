@@ -169,7 +169,8 @@ var _replay_t := -1.0              # < 0: not replaying
 var _replay_wait := 0.0
 var _replay_cam_side := 1.0
 var _replay_snd_i := -1
-var _celeb_won := 0                # the team celebrating (for after a replay)            # last replay frame whose sounds have played
+var _celeb_won := 0
+var _just_started := true          # a new match: flash your ring on the first serve                # the team celebrating (for after a replay)            # last replay frame whose sounds have played
 var _since_replay := 99            # points since the last replay (long rallies wait their turn)
 var _rec_total := 0                # frames ever recorded this point
 var _last_hit_at := 0              # _rec_total when the ball was last struck
@@ -915,6 +916,7 @@ func _on_mode_chosen(id: String, golden: bool) -> void:
 	streak = 0
 	feeds = 0
 	drill_done = 0
+	_just_started = true
 	combo = 0.0
 	combo_armed = false
 	for p in players:
@@ -1732,6 +1734,8 @@ func _start_point() -> void:
 		h.position = Vector3(0, 0, DRILL_INFO[d].z)
 		h.vel = Vector3.ZERO
 		h.face_net()
+		if feeds == 0:
+			h.flash_ring()
 		if d in ["smash", "por_cuatro"]:
 			h.smash_charge = 1.0
 		ball.live = false
@@ -1775,6 +1779,9 @@ func _start_point() -> void:
 	ball.live = false
 	_hold_ball(srv)
 	_snap_positions()
+	if not _ai_human() and (rally_hits == 0) and (score.points_in_game() == 0 or _just_started):
+		_me().flash_ring()
+	_just_started = false
 	last_hitter_team = st
 	state_timer = 0.9
 	if srv == players[0] and not _ai_human():
@@ -1871,7 +1878,6 @@ func _tick_replay(delta: float) -> void:
 		_replay_t = 0.0
 		_replay_snd_i = -1
 		sfx.duck_crowd(0.4)
-		sfx.ui("whoosh", -6.0)
 		_celeb_cam = -1
 		for p in players:
 			p.stop_celebrating()
@@ -1951,6 +1957,13 @@ func _start_celebration() -> void:
 			p.celebrate("jump" if randf() < 0.5 else "pump", null, meet)
 	_celeb_cam = team
 	_celeb_at = elapsed
+	# a shout from the winners ("yes!", a whoop): from the nearest of them
+	var shouter: Player = null
+	for p in _team(team):
+		if p.visible and (shouter == null or p == _me()):
+			shouter = p
+	if shouter:
+		sfx.voice(shouter.position + Vector3(0, 1.6, 0))
 	if quit_after > 0.0:
 		print("[celebrate] t=%.1f team %d" % [elapsed, team])
 	scenery.cheer(1.0)

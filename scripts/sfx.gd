@@ -40,6 +40,7 @@ func _ready() -> void:
 	add_child(_flat)
 	_crowd = AudioStreamPlayer.new()
 	add_child(_crowd)
+	_load_voices()
 	apply_settings()
 
 
@@ -59,6 +60,42 @@ func at(sound: String, pos: Vector3, volume_db := 0.0, pitch := 1.0) -> void:
 	p.global_position = pos
 	p.volume_db = volume_db + randf_range(-1.5, 1.0)
 	p.pitch_scale = pitch * randf_range(0.94, 1.06)
+	p.play()
+
+
+## Players' shouts after a big point: any assets/sfx/voice_*.ogg|wav, picked
+## at random (none = silent).
+var _voices: Array = []
+var _last_voice := -1
+
+
+func _load_voices() -> void:
+	var dir := DirAccess.open("res://assets/sfx")
+	if dir == null:
+		return
+	var seen := {}
+	for f in dir.get_files():
+		f = f.trim_suffix(".import").trim_suffix(".remap")
+		if f.begins_with("voice_") and (f.ends_with(".ogg") or f.ends_with(".wav")) and not seen.has(f):
+			seen[f] = true
+			var r := load("res://assets/sfx/" + f)
+			if r:
+				_voices.append(r)
+
+
+func voice(pos: Vector3, volume_db := -2.0) -> void:
+	if _voices.is_empty():
+		return
+	var i := randi() % _voices.size()
+	if _voices.size() > 1 and i == _last_voice:
+		i = (i + 1) % _voices.size()
+	_last_voice = i
+	var p := _pool[_next]
+	_next = (_next + 1) % POOL
+	p.stream = _voices[i]
+	p.global_position = pos
+	p.volume_db = volume_db
+	p.pitch_scale = randf_range(0.97, 1.04)
 	p.play()
 
 
