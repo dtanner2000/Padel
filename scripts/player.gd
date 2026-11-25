@@ -68,6 +68,16 @@ var _band_off: MeshInstance3D   # second sweatband, on the free wrist
 var _hat: Node3D           # cosmetic headwear, on the model's head bone
 var _band: MeshInstance3D  # cosmetic wristband on the paddle arm
 var _hat_holder: Node3D
+## Where a headband / bandana sits on each model's head (head-bone space, m):
+## y = height of the band's centre, z = forward shift, r = radius across,
+## d = radius front to back, tilt = front lower than back (radians).
+const HEAD_FIT := {
+	"you": {"y": 0.155, "z": 0.006, "r": 0.094, "d": 0.113, "tilt": -0.42},
+	"ana": {"y": 0.15, "z": 0.006, "r": 0.086, "d": 0.105, "tilt": -0.42},
+	"marco": {"y": 0.15, "z": 0.006, "r": 0.096, "d": 0.116, "tilt": -0.42},
+	"leo": {"y": 0.145, "z": 0.006, "r": 0.098, "d": 0.116, "tilt": -0.42},
+}
+var head_fit: Dictionary = HEAD_FIT["you"]
 var _clip_mats: Array[ShaderMaterial] = []   # cap on: character materials that hide the hair under it
 const CLIP_SHADER := preload("res://shaders/character_clip.gdshader")
 
@@ -200,37 +210,48 @@ func set_cosmetics(hat: String, hat_col: Color, band_col: Color, kit_col := Colo
 			mi.rotation = rot
 			mi.scale = scl
 			holder.add_child(mi)
+		var f := head_fit
+		var r: float = f.r
+		var band_at := Vector3(0, f.y, f.z)
+		var band_rot := Vector3(f.tilt, 0, 0)
+		var band_scl := Vector3(1.0, 1.0, f.d / r)
 		var ring := CylinderMesh.new()
-		ring.top_radius = 0.098
-		ring.bottom_radius = 0.1
-		ring.height = 0.035
-		ring.radial_segments = 16
+		ring.top_radius = r * 0.97
+		ring.bottom_radius = r
+		ring.height = 0.03
+		ring.radial_segments = 24
+		ring.cap_top = false
+		ring.cap_bottom = false
+		# the back of the band in head space (for the bandana's knot)
+		var back := band_at + Basis.from_euler(band_rot) * Vector3(0, 0, -f.d)
 		match hat:
 			"headband":
-				add.call(ring, Vector3(0, 0.2, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
+				add.call(ring, band_at, band_rot, band_scl)
 			"bandana":
-				# a deeper band tied at the back, two tails hanging down
+				# a deeper band tied at the back, two short tails hanging down
 				var deep := CylinderMesh.new()
-				deep.top_radius = 0.097
-				deep.bottom_radius = 0.101
-				deep.height = 0.055
-				deep.radial_segments = 16
-				add.call(deep, Vector3(0, 0.205, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
+				deep.top_radius = r * 0.96
+				deep.bottom_radius = r
+				deep.height = 0.042
+				deep.radial_segments = 24
+				deep.cap_top = false
+				deep.cap_bottom = false
+				add.call(deep, band_at, band_rot, band_scl)
 				var knot := SphereMesh.new()
-				knot.radius = 0.022
-				knot.height = 0.036
-				add.call(knot, Vector3(0, 0.215, -0.118))
+				knot.radius = 0.016
+				knot.height = 0.026
+				add.call(knot, back + Vector3(0, 0.0, -0.008))
 				var tail := BoxMesh.new()
-				tail.size = Vector3(0.03, 0.12, 0.006)
-				add.call(tail, Vector3(-0.022, 0.16, -0.13), Vector3(0.35, 0, 0.25))
-				add.call(tail, Vector3(0.024, 0.15, -0.128), Vector3(0.3, 0, -0.18))
+				tail.size = Vector3(0.024, 0.085, 0.005)
+				add.call(tail, back + Vector3(-0.014, -0.045, -0.016), Vector3(0.3, 0, 0.22))
+				add.call(tail, back + Vector3(0.016, -0.05, -0.014), Vector3(0.25, 0, -0.15))
 			"visor":
-				add.call(ring, Vector3(0, 0.2, 0.0), Vector3(-0.2, 0, 0), Vector3(1.0, 1.0, 1.12))
+				add.call(ring, band_at, band_rot, band_scl)
 				var peak := CylinderMesh.new()
 				peak.top_radius = 0.08
 				peak.bottom_radius = 0.08
 				peak.height = 0.01
-				add.call(peak, Vector3(0, 0.205, 0.12), Vector3(-0.3, 0, 0), Vector3(1.1, 1.0, 1.0))
+				add.call(peak, band_at + Basis.from_euler(band_rot) * Vector3(0, -0.01, f.d + 0.035), Vector3(-0.22, 0, 0), Vector3(1.1, 1.0, 0.85))
 			"cap":
 				# crown: a full-height dome sitting low enough to cover the hair,
 				# tipped forward so the front edge meets the forehead
@@ -830,6 +851,7 @@ func use_model(scene: PackedScene) -> void:
 		_skel = null
 		_bones.clear()
 	_model = scene.instantiate()
+	head_fit = HEAD_FIT.get(scene.resource_path.get_file().get_basename(), HEAD_FIT["you"])
 	_model.rotation.y = PI          # Meshy faces +Z; players face -Z
 	_body.add_child(_model)
 	var found := _model.find_children("*", "Skeleton3D", true, false)
