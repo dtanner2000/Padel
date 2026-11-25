@@ -83,7 +83,7 @@ func _load_voices() -> void:
 				_voices.append(r)
 
 
-func voice(pos: Vector3, volume_db := -2.0) -> void:
+func voice(pos: Vector3, volume_db := 0.0) -> void:
 	if _voices.is_empty():
 		return
 	var i := randi() % _voices.size()
