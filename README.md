@@ -52,7 +52,7 @@ Each venue has its own surroundings: an indoor club hall (Club Night), a park (R
 
 ### Replays
 
-Big points get a slow-motion replay from a low side-on camera: a winning power smash, víbora, chiquita or contrapared, or (at most every fourth point) a 20-shot rally or a smash out of the court. Tap HIT to skip, or turn replays off in Settings. Offline only. Every frame of the rally is kept in a 5-second ring buffer (positions plus each player's rig pose); the replay shows from a second before the decisive shot to 1.7 s after it, blended back at 45 % speed.
+Big points get a slow-motion replay from a low side-on camera: a winning power smash, víbora, chiquita or contrapared, or (at most every fourth point) a 20-shot rally or a smash out of the court. Tap HIT to skip, or turn replays off in Settings. Offline only. Every frame of the rally is kept in a 5-second ring buffer (positions plus each player's rig pose); the replay shows from a second before the decisive shot to 1.7 s after it, blended back at 45 % speed. The players celebrate first, then the replay plays with a whoosh, the crowd fades out, and the rally's own hit and bounce sounds play back slowed down with the picture.
 
 ### Celebrations
 

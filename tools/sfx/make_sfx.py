@@ -129,3 +129,14 @@ def applause(sec, claps_per_sec, peak_at):
 # The synthesised versions below are kept for reference only.
 # save("applause", applause(2.6, 260, 0.35), 0.6)
 # save("applause_big", applause(4.0, 520, 0.5), 0.75)
+
+# whoosh: the replay stinger, a filtered noise sweep that rises and falls
+n = int(SR * 0.55)
+x = np.arange(n) / SR
+noise = rng.normal(size=n)
+sweep = np.zeros(n)
+for lo, hi, w in [(300, 900, 0.5), (900, 2500, 0.7), (2500, 6000, 0.4)]:
+    sweep += band(noise, lo, hi) * w
+shape = np.sin(np.clip(x / 0.55, 0, 1) * np.pi) ** 1.6
+pan = 0.5 + 0.5 * np.sin(x * 9.0)
+save("whoosh", lowpass(sweep * shape * (0.6 + 0.4 * pan), 5000), 0.5)

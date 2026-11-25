@@ -166,6 +166,8 @@ var _replay: Array = []
 var _replay_t := -1.0              # < 0: not replaying
 var _replay_wait := 0.0
 var _replay_cam_side := 1.0
+var _replay_snd_i := -1
+var _celeb_won := 0                # the team celebrating (for after a replay)            # last replay frame whose sounds have played
 var _since_replay := 99            # points since the last replay (long rallies wait their turn)
 var _rec_total := 0                # frames ever recorded this point
 var _last_hit_at := 0              # _rec_total when the ball was last struck
@@ -1800,7 +1802,9 @@ func _record_frame() -> void:
 	var rigs: Array = []
 	for p in players:
 		rigs.append(p.rig_state())
-	_rec.append([ball.position, ball.shown_spin, rigs])
+	var snd: Array = sfx.log.duplicate()
+	sfx.log.clear()
+	_rec.append([ball.position, ball.shown_spin, rigs, snd])
 	_rec_total += 1
 	if _rec.size() > int(REC_SECONDS * Engine.physics_ticks_per_second):
 		_rec.pop_front()
@@ -1825,7 +1829,8 @@ func _maybe_replay(team: int, reason: String) -> void:
 		_replay = _rec.slice(a, b)
 		if _replay.size() < 30:
 			_replay = _rec.slice(maxi(0, _rec.size() - int(2.4 * fps)))
-		_replay_wait = 1.2
+		# the players' reaction first, then the replay (like TV)
+		_replay_wait = (3.2 if _celeb_match else 2.3) if _celeb_team >= 0 else 0.9
 		_replay_cam_side = 1.0 if randf() < 0.5 else -1.0
 		state_timer = maxf(state_timer, _replay_wait + _replay.size() / (Engine.physics_ticks_per_second * REPLAY_SPEED) + 0.6)
 
@@ -1838,11 +1843,16 @@ func _tick_replay(delta: float) -> void:
 		if _replay_wait > 0.0:
 			return
 		_replay_t = 0.0
+		_replay_snd_i = -1
+		sfx.duck_crowd(0.4)
+		sfx.ui("whoosh", -6.0)
+		_celeb_cam = -1
 		for p in players:
+			p.stop_celebrating()
 			p.replaying = true
 		hud.set_banner("REPLAY  ·  tap HIT to skip")
 		if quit_after > 0.0:
-			print("[replay] %d frames, %s" % [_replay.size(), last_shot_kind])
+			print("[replay] t=%.1f %d frames, %s" % [elapsed, _replay.size(), last_shot_kind])
 	_replay_t += delta * REPLAY_SPEED * Engine.physics_ticks_per_second
 	var i := int(_replay_t)
 	if i >= _replay.size() - 1:
@@ -1850,6 +1860,11 @@ func _tick_replay(delta: float) -> void:
 		if state == State.POINT_OVER:
 			state_timer = minf(state_timer, 0.5)
 		return
+	# the rally's own sounds, slowed down with the picture
+	while _replay_snd_i < i:
+		_replay_snd_i += 1
+		for sd in (_replay[_replay_snd_i][3] if _replay[_replay_snd_i].size() > 3 else []):
+			sfx.at(sd[0], sd[1], sd[2] - 2.0, 0.72)
 	var a: Array = _replay[i]
 	var b: Array = _replay[i + 1]
 	var k := _replay_t - i
@@ -1874,6 +1889,12 @@ func _end_replay() -> void:
 	for p in players:
 		p.replaying = false
 	hud.set_banner("")
+	if state == State.MATCH_OVER and _orbit_t >= 0.0:
+		# back to the winners for the rest of the lap
+		_orbit_centre = _team_centre(_celeb_won)
+		for p in players:
+			if p.visible:
+				p.celebrate("jump" if p.team == _celeb_won else "sad")
 
 
 ## The winners celebrate (a high five and jumps after a match, otherwise a
@@ -1882,6 +1903,7 @@ func _end_replay() -> void:
 func _start_celebration() -> void:
 	var team := _celeb_team
 	_celeb_team = -1
+	_celeb_won = team
 	# partners come together (on a line across the court), then celebrate
 	var mid := _team_centre(team)
 	mid.z = Court.team_sign(team) * clampf(absf(mid.z), 3.0, 7.5)
@@ -1903,6 +1925,8 @@ func _start_celebration() -> void:
 			p.celebrate("jump" if randf() < 0.5 else "pump", null, meet)
 	_celeb_cam = team
 	_celeb_at = elapsed
+	if quit_after > 0.0:
+		print("[celebrate] t=%.1f team %d" % [elapsed, team])
 	scenery.cheer(1.0)
 	if _celeb_match:
 		_orbit_t = 0.0
@@ -2155,13 +2179,13 @@ func _award(team: int, reason: String) -> void:
 	var big := rally_hits >= 8 or reason == "Out of the court!" or res in ["set", "match"]
 	sfx.crowd(big)
 	scenery.cheer(1.0 if big else 0.4)
-	_maybe_replay(team, reason)
 	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
 	if special or res in ["set", "match"] or (reason == "Out of the court!" and team == last_hitter_team):
 		_celeb_team = team
 		_celeb_match = res == "match"
 	_celeb_five = _last_together and team == 0
 	_last_together = false
+	_maybe_replay(team, reason)   # after the celebration (it waits for it)
 	if team == 0 and net_role == "" and not _ai_human() and not combo_armed:
 		combo = minf(1.0, combo + 3.0 / COMBO_HITS)
 	var mine := _my_team()
@@ -2432,7 +2456,7 @@ func _physics_process(delta: float) -> void:
 		_on_shot_requested("combo", Vector2.ZERO)
 		if quit_after > 0.0:
 			print("[combo] armed at t=%.1f" % elapsed)
-	elif mash and mash_kind == "" and Engine.get_physics_frames() % 15 == 0:
+	elif mash and mash_kind == "" and Engine.get_physics_frames() % 15 == 0 and state != State.POINT_OVER:
 		var a := Vector2(randf_range(-1, 1), randf_range(-0.5, 0.8))
 		_on_shot_requested("smash" if randf() < 0.15 else Hud.swipe_kind(a), a)
 	_read_keyboard()
@@ -2468,12 +2492,14 @@ func _physics_process(delta: float) -> void:
 		State.SERVE_WAIT:
 			_tick_serve(delta)
 		State.RALLY:
+			sfx.log_on = true
 			_tick_rally(delta)
 			_record_frame()
+			sfx.log_on = false
 		State.POINT_OVER:
-			_tick_replay(delta)
-			if _celeb_team >= 0 and _replay.is_empty():
+			if _celeb_team >= 0:
 				_start_celebration()
+			_tick_replay(delta)
 			for p in players:
 				if not p.replaying:
 					p.move_dir(Vector3.ZERO, delta)
@@ -2481,9 +2507,9 @@ func _physics_process(delta: float) -> void:
 			if state_timer <= 0.0:
 				_start_point()
 		State.MATCH_OVER:
-			_tick_replay(delta)
-			if _celeb_team >= 0 and _replay.is_empty():
+			if _celeb_team >= 0:
 				_start_celebration()
+			_tick_replay(delta)
 			state_timer -= delta
 			if state_timer <= 0.0 and _ai_human():
 				score = MatchScore.create(score.games_per_set, score.sets_to_win, score.golden_point)

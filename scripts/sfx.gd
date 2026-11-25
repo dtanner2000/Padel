@@ -3,7 +3,7 @@ extends Node
 ## Sound effects: a small pool of positional players for ball sounds, and a
 ## flat player for the crowd and UI. Muted through Profile's sound setting.
 
-const SOUNDS := ["paddle", "smash", "floor", "glass", "mesh", "net", "squeak", "click", "ding", "buzz", "applause", "applause_big"]
+const SOUNDS := ["paddle", "smash", "floor", "glass", "mesh", "net", "squeak", "click", "ding", "buzz", "applause", "applause_big", "whoosh"]
 const POOL := 10
 
 static var instance: Sfx
@@ -14,6 +14,9 @@ var _next := 0
 var _flat: AudioStreamPlayer
 var _crowd: AudioStreamPlayer
 var crowd_level := 0.6     # venue crowd size: 0.5 club .. 1.0 arena
+var log_on := false        # main.gd records ball sounds for the replay
+var log: Array = []        # [sound, pos, volume_db] since last read
+var _duck: Tween
 
 
 func _ready() -> void:
@@ -48,6 +51,8 @@ func apply_settings() -> void:
 func at(sound: String, pos: Vector3, volume_db := 0.0, pitch := 1.0) -> void:
 	if not _streams.has(sound):
 		return
+	if log_on:
+		log.append([sound, pos, volume_db])
 	var p := _pool[_next]
 	_next = (_next + 1) % POOL
 	p.stream = _streams[sound]
@@ -72,7 +77,20 @@ func crowd(big := false) -> void:
 		_crowd.stream = _streams[key]
 		_crowd.volume_db = linear_to_db(clampf(crowd_level * (1.0 if big else 0.8), 0.05, 1.0)) - 4.2   # about 13 % quieter than first mixed
 		_crowd.pitch_scale = randf_range(0.95, 1.05)
+		if _duck and _duck.is_valid():
+			_duck.kill()
 		_crowd.play()
+
+
+## Fade the crowd out (a replay is starting).
+func duck_crowd(secs := 0.5) -> void:
+	if not _crowd.playing:
+		return
+	if _duck and _duck.is_valid():
+		_duck.kill()
+	_duck = create_tween()
+	_duck.tween_property(_crowd, "volume_db", -40.0, secs)
+	_duck.tween_callback(_crowd.stop)
 
 
 static func play_ui(sound := "click") -> void:
