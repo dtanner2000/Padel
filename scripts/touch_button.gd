@@ -23,6 +23,11 @@ var enabled := true:
 		if v != enabled:
 			enabled = v
 			queue_redraw()
+var armed := false:            # tapped and waiting for the ball: a bright ring
+	set(v):
+		if v != armed:
+			armed = v
+			queue_redraw()
 var touch_when_disabled := false   # SMASH: dimmed until charged, but a press still plays a shot
 var readiness := -1.0:   # 0..1 draws the timing arc; < 0 hides it
 	set(v):
@@ -123,7 +128,11 @@ func _draw() -> void:
 		f = Color(f.r, f.g, f.b, f.a * 0.45)
 	if _touch != -1:
 		f = f.lightened(0.15)
+	if armed:
+		f = Color(0.78, 0.96, 0.2, 0.55)
 	draw_circle(c, radius, f)
+	if armed:
+		draw_arc(c, radius + 3, 0, TAU, 48, Color("c6f432"), 4.0, true)
 	draw_arc(c, radius, 0, TAU, 64, Color(outline, outline.a * (1.0 if enabled else 0.4)), 2.0, true)
 	var font := ThemeDB.fallback_font
 	var tc := text_color if enabled else Color(text_color, 0.45)

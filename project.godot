@@ -19,6 +19,8 @@ config/description="Padel: Off The Glass — arcade padel doubles for iOS and An
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6", "Mobile")
 config/icon="res://icon.svg"
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.027, 0.043, 0.086, 1)
 
 [display]
 

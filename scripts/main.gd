@@ -27,6 +27,7 @@ enum State { SERVE_WAIT, RALLY, POINT_OVER, MATCH_OVER }
 
 const SERVE_ORDER := [0, 2, 1, 3]   # you, rival/friend, Ana, Leo
 const BUFFER_TIME := 0.3            # a HIT pressed this early still counts
+const LATCH_TIME := 1.1             # LOB / SMASH pressed this early still counts
 const MOVE_ASSIST := 0.75           # auto-move towards your ball when the stick is idle (0 = off)
 const DEAD_BALL_TIME := 8.0
 const CHARGE_HITS := 12.0           # SMASH charges over ~10-12 hits (perfect timing counts double)
@@ -87,6 +88,7 @@ class Pad:
 	var mirror := 1.0
 	var touch := true          # held input comes from the touch HIT button (so flicks mean slice)
 	var side := 0.0            # SMASH swiped sideways: por cuatro to that side (world x sign)
+	var latch := 0.0           # LOB / SMASH tapped: wait this long for the ball, whatever HIT is doing
 
 	func world_move() -> Vector3:
 		var m := move.limit_length(1.0)
@@ -351,6 +353,9 @@ func _ready() -> void:
 		_on_mode_chosen("match", true)
 	else:
 		_go_menu()
+		# the studio ident: on a real launch (not a test run), or with --intro
+		if (quit_after < 0.0 and shot_path == "" and not Array(OS.get_cmdline_user_args()).any(func(a: String) -> bool: return a.begins_with("--screen"))) or "--intro" in OS.get_cmdline_user_args():
+			add_child(Intro.new())
 		if "--show-training" in OS.get_cmdline_user_args():
 			hud.show_training(true, _training_summary())
 		for a in OS.get_cmdline_user_args():
@@ -1726,8 +1731,10 @@ func _start_point() -> void:
 	ring.visible = false
 	aim_marker.visible = false
 	pad_local.buffer = 0.0
+	pad_local.latch = 0.0
 	for pd in pads.values():
 		pd.buffer = 0.0
+		pd.latch = 0.0
 	_set_rally(0)
 
 	if practice:
@@ -2479,7 +2486,7 @@ func _physics_process(delta: float) -> void:
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(shot_path)
 		print("saved ", shot_path)
-	if shot_at > 0.0 and elapsed >= shot_at and (state == State.RALLY or net_role == "client" or practice):
+	if shot_at > 0.0 and elapsed >= shot_at and (state == State.RALLY or net_role == "client" or practice or "--intro" in OS.get_cmdline_user_args()):
 		shot_at = -1.0
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(shot_path)
@@ -2524,8 +2531,10 @@ func _physics_process(delta: float) -> void:
 		_client_tick(delta)
 		return
 	pad_local.buffer = maxf(0.0, pad_local.buffer - delta)
+	pad_local.latch = maxf(0.0, pad_local.latch - delta)
 	for pd in pads.values():
 		pd.buffer = maxf(0.0, pd.buffer - delta)
+		pd.latch = maxf(0.0, pd.latch - delta)
 	pad_local.mirror = 1.0
 	pad_local.touch = hud.hit_btn.is_held()
 	pad_local.move = hud.joystick.value + Input.get_vector("move_left", "move_right", "move_up", "move_down")
@@ -2575,6 +2584,7 @@ func _tick_serve(delta: float) -> void:
 		var pad := _pad_for(srv)
 		if pad.buffer > 0.0 and state_timer <= 0.0:
 			pad.buffer = 0.0
+			pad.latch = 0.0
 			_serve(srv, pad.world_aim(pad.aim))
 	elif state_timer <= 0.0:
 		_serve(srv, Vector2(randf_range(-0.3, 0.3), randf_range(-0.3, 0.3)))
@@ -2930,14 +2940,21 @@ func _pad_shot(pad: Pad, kind: String, aim: Vector2) -> void:
 		pad.side = signf(pad.world_aim(aim).x)
 		if pad.kind != "smash" or pad.buffer <= 0.0:
 			pad.kind = "smash"
-			pad.buffer = BUFFER_TIME
+			pad.buffer = LATCH_TIME
+			pad.latch = LATCH_TIME
 		return
 	if kind == "smash":
 		pad.side = 0.0
 	if kind == "drive" and pad.held_fired:
 		pad.held_fired = false   # this release belongs to a shot already played
 		return
-	pad.buffer = BUFFER_TIME
+	if kind in ["lob", "smash"]:
+		# a tap on LOB / SMASH is a decision: hold it until the ball arrives
+		pad.buffer = LATCH_TIME
+		pad.latch = LATCH_TIME
+	else:
+		pad.buffer = BUFFER_TIME
+		pad.latch = 0.0
 	pad.kind = kind
 	pad.aim = aim
 
@@ -2964,7 +2981,7 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 	# holding HIT keeps the shot armed; it fires the moment the ball is in reach,
 	# aimed by wherever the thumb is at that instant
 	var held := pad.held and state == State.RALLY
-	if held:
+	if held and pad.latch <= 0.0:
 		pad.buffer = maxf(pad.buffer, 0.05)
 		pad.kind = Hud.swipe_kind(pad.live_aim) if pad.touch else "drive"
 		pad.aim = pad.live_aim
@@ -3006,6 +3023,7 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 			q = 1.0
 		var glass := wall_since_bounce
 		pad.buffer = 0.0
+		pad.latch = 0.0
 		pad.side = 0.0
 		pad.held_fired = held
 		var miss := maxf(0.0, (0.7 - q) * 0.6) + _difficulty(p) * 0.12
@@ -3095,6 +3113,8 @@ func _update_hud() -> void:
 	hud.hit_btn.readiness = r[0]
 	hud.smash_btn.charge = r[1]
 	hud.smash_btn.enabled = r[1] >= 1.0
+	hud.lob_btn.armed = pad_local.latch > 0.0 and pad_local.kind == "lob"
+	hud.smash_btn.armed = pad_local.latch > 0.0 and pad_local.kind == "smash"
 	var show_combo := net_role == "" and not practice and players[1].visible
 	hud.combo_btn.visible = show_combo
 	hud.combo_btn.charge = 1.0 if combo_armed else combo
