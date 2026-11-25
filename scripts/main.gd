@@ -1005,7 +1005,7 @@ func _start_daily() -> void:
 		"pattern": patterns[ch_rng.randi() % patterns.size()],
 		"speed": ch_rng.randf_range(0.55, 0.95),
 		"phase": ch_rng.randf_range(0.0, TAU),
-		"height": ch_rng.randf_range(1.0, 1.4),
+		"height": ch_rng.randf_range(0.7, 1.0),   # low on the glass: a ball off the bounce rises into it
 	}
 	ch_goals = 0
 	ch_lives = 3
@@ -1720,7 +1720,7 @@ func _start_point() -> void:
 			target_marker.position = Vector3(target_sign * 2.6, 0.02, -7.4)
 		_snap_positions()
 		last_hitter_team = 1
-		state_timer = 2.2 if feeds == 0 else 1.0
+		state_timer = 4.4 if feeds == 0 else 1.0   # first ball waits for the instructions to clear
 		if drill_id == "mix" and feeds > 0 and feeds % 4 == 0:
 			hud.show_message(DRILL_INFO[d].name, 1.2)
 		if challenge:
@@ -2436,7 +2436,7 @@ func _physics_process(delta: float) -> void:
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(shot_path)
 		print("saved ", shot_path)
-	if shot_at > 0.0 and elapsed >= shot_at and (state == State.RALLY or net_role == "client"):
+	if shot_at > 0.0 and elapsed >= shot_at and (state == State.RALLY or net_role == "client" or practice):
 		shot_at = -1.0
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(shot_path)
@@ -2849,6 +2849,10 @@ func _on_shot_requested(kind: String, aim: Vector2) -> void:
 		_choice_default = Callable()
 		hud.show_choices([])
 		f.call()
+		return
+	if practice and state == State.SERVE_WAIT and feeds == 0 and state_timer > 0.8:
+		hud.show_message("", 0.0)
+		state_timer = 0.8   # read it already: start now
 		return
 	if state == State.POINT_OVER and _celeb_cam >= 0 and not _celeb_match:
 		state_timer = minf(state_timer, 0.2)   # skip the celebration

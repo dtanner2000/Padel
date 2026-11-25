@@ -132,10 +132,21 @@ func _ready() -> void:
 	_wind_label.visible = false
 	safe.add_child(_wind_label)
 
-	_message = _label("", 30, Color.WHITE)
+	_message = _label("", 28, Color.WHITE)
 	_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_message.add_theme_constant_override("outline_size", 10)
-	_message.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
+	_message.add_theme_constant_override("outline_size", 4)
+	_message.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.5))
+	_message.add_theme_constant_override("line_spacing", 2)
+	var box := StyleBoxFlat.new()            # a soft dark panel behind the text
+	box.bg_color = Color(0.03, 0.06, 0.11, 0.62)
+	box.set_corner_radius_all(16)
+	box.border_color = Color(1, 1, 1, 0.08)
+	box.set_border_width_all(1)
+	box.content_margin_left = 26
+	box.content_margin_right = 26
+	box.content_margin_top = 12
+	box.content_margin_bottom = 14
+	_message.add_theme_stylebox_override("normal", box)
 	safe.add_child(_message)
 	_callout = _pill_label("", 15, INK, Color.WHITE)
 	safe.add_child(_callout)
@@ -215,7 +226,7 @@ func _process(delta: float) -> void:
 	_msg_t -= delta
 	_callout_t -= delta
 	_flash_t -= delta
-	_message.visible = _msg_t > 0.0
+	_message.visible = _msg_t > 0.0 and _message.text != ""
 	_callout.visible = _callout_t > 0.0
 	_flash.visible = _flash_t > 0.0
 
