@@ -7,6 +7,12 @@ const COINS := 50
 
 ## id, title, description, test(ctx) where ctx has "drills" (training drills done).
 static func list() -> Array:
+	if Online.ENABLED:
+		return _all()
+	return _all().filter(func(a: Array) -> bool: return not a[0] in ["online_win", "gold_tier"])
+
+
+static func _all() -> Array:
 	return [
 		["first_win", "First win", "Win a match", func(_c: Dictionary) -> bool: return Profile.stat("wins") >= 1],
 		["ten_wins", "Regular", "Win 10 matches", func(_c: Dictionary) -> bool: return Profile.stat("wins") >= 10],

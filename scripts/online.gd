@@ -12,6 +12,9 @@ signal failed(msg: String)
 ## The deployed relay. Must be wss:// with a hostname (Apple review uses
 ## IPv6-only networks, and both stores expect encrypted traffic).
 const RELAY_URL := "wss://padel-relay.fly.dev"
+## Online play on/off. Off until the relay is deployed: hides Play online from
+## the menu, the online rows in Stats, and the two online achievements.
+const ENABLED := false
 
 var url := RELAY_URL
 var peer: RelayPeer

@@ -595,6 +595,8 @@ func _build_menu() -> void:
 	var first := true
 	for m in MODES:
 		var id: String = m[0]
+		if id == "online" and not Online.ENABLED:
+			continue
 		var b := _menu_item(m[1], m[2], first)
 		first = false
 		match id:
@@ -1329,6 +1331,8 @@ func show_stats(on: bool) -> void:
 		["Víboras", str(Profile.stat("vibora"))], ["Chiquitas", str(Profile.stat("chiquita"))],
 		["Contraparedes", str(Profile.stat("contrapared"))], ["Online rating", "%d · %s" % [Profile.rating(), Roster.tier(Profile.rating())]],
 	]
+	if not Online.ENABLED:
+		rows = rows.filter(func(r: Array) -> bool: return not String(r[0]).begins_with("Online"))
 	var got := 0
 	for a in Awards.list():
 		got += 1 if Awards.unlocked(a[0]) else 0

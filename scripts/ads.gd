@@ -8,7 +8,7 @@ extends Node
 
 ## Google's test units until launch: real ads on your own phone break AdMob's
 ## rules. Flip to false for the App Store release build.
-const USE_TEST_ADS := true
+const USE_TEST_ADS := false
 
 const IOS_INTERSTITIAL := "ca-app-pub-4925808836448571/5866076245"
 const IOS_REWARDED := "ca-app-pub-4925808836448571/5319281339"

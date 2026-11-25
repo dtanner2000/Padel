@@ -92,7 +92,7 @@ static func _sync_all() -> void:
 static func submit_bests() -> void:
 	score("daily_best", Profile.stat("daily_best"))
 	score("longest_rally", Profile.stat("longest_rally"))
-	if Profile.stat("online_matches") > 0:
+	if Online.ENABLED and Profile.stat("online_matches") > 0:
 		score("online_rating", Profile.rating())
 
 
