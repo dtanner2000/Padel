@@ -29,11 +29,11 @@ const MUTED := Color("a9b4c6")
 ## Menu entries: id, title, detail. The first two are highlighted.
 const MODES := [
 	["career", "Career", "Win tournaments, unlock new courts"],
-	["quick", "Quick match", "One set, first to 4 games · about 5 minutes"],
-	["training", "Training", "Learn every shot: drills with a ball machine"],
-	["daily", "Daily challenge", "Hit the moving goal on the back glass"],
-	["online", "Play online", "Quick match, or a private game with a friend"],
-	["longer", "Longer match", "One set, or best of three"],
+	["quick", "Quick match", "About 5 minutes"],
+	["daily", "Daily challenge", "Hit the moving goal"],
+	["training", "Training", "Every shot, with a ball machine"],
+	["online", "Play online", "Ranked · friends"],
+	["longer", "Longer match", "Set or best of 3"],
 ]
 
 ## Training drills: id, name. Details (tips, goals) live in main.gd.
@@ -82,6 +82,13 @@ var _callout_t := 0.0
 var _flash_t := 0.0
 
 var _menu: Control
+var _menu_art: MenuArt
+var _menu_col: VBoxContainer
+var _menu_shade: ColorRect
+var _hero_rect: TextureRect
+var _coins_badge: Label
+var _hero: MenuHero
+const FONT_DISPLAY := preload("res://assets/fonts/Anton-Regular.ttf")
 var _menu_buttons := {}        # mode id -> Button (subtitles get refreshed)
 var _pills := {}               # bottom-row pills on the menu
 var _screens: Array[Control] = []   # full-screen overlays (sized in _layout)
@@ -228,6 +235,8 @@ func _process(delta: float) -> void:
 	_callout_t -= delta
 	_flash_t -= delta
 	_message.visible = _msg_t > 0.0 and _message.text != ""
+	if _hero:
+		_hero.set_active(_menu.visible)
 	_callout.visible = _callout_t > 0.0
 	_flash.visible = _flash_t > 0.0
 
@@ -551,28 +560,41 @@ func _build_pause_button() -> void:
 
 
 func _build_menu() -> void:
-	_menu = ColorRect.new()
-	(_menu as ColorRect).color = Color(0.03, 0.06, 0.1, 0.72)
+	# poster layout: a dark slab on the left with the mode list, cut on a
+	# diagonal edge of lime and blue stripes; your pair celebrating on the right
+	_menu = Control.new()
 	_menu.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_menu)
-	var centre := CenterContainer.new()
-	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_menu.add_child(centre)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 7)
-	centre.add_child(col)
-	var title := _label("OFF THE GLASS", 42, Color.WHITE)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(title)
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 8)
-	col.add_child(grid)
+	_menu_shade = ColorRect.new()          # darkens the live court behind the art
+	_menu_shade.color = Color(0.02, 0.04, 0.09, 0.35)
+	_menu_shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_menu.add_child(_menu_shade)
+	_hero_rect = TextureRect.new()
+	_hero_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_hero_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_hero_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_menu.add_child(_hero_rect)
+	_menu_art = MenuArt.new()
+	_menu_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_menu.add_child(_menu_art)
+	_menu_col = VBoxContainer.new()
+	_menu_col.add_theme_constant_override("separation", 0)
+	_menu.add_child(_menu_col)
+	var title := HBoxContainer.new()
+	title.add_theme_constant_override("separation", 14)
+	for part in [["OFF THE", Color.WHITE], ["GLASS", LIME]]:
+		var t := _label(part[0], 54, part[1])
+		t.add_theme_font_override("font", FONT_DISPLAY)
+		title.add_child(t)
+	_menu_col.add_child(title)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(0, 10)
+	_menu_col.add_child(gap)
+	var first := true
 	for m in MODES:
 		var id: String = m[0]
-		var b := _button("%s\n%s" % [m[1], m[2]], 15, LIME if id in ["career", "quick"] else Color(1, 1, 1, 0.94), INK)
-		b.custom_minimum_size = Vector2(330, 58)
+		var b := _menu_item(m[1], m[2], first)
+		first = false
 		match id:
 			"online": b.pressed.connect(func() -> void: show_online(true))
 			"training": b.pressed.connect(func() -> void: show_training(true, _training_info))
@@ -581,15 +603,40 @@ func _build_menu() -> void:
 			"longer": b.pressed.connect(func() -> void: _open(_longer))
 			_: b.pressed.connect(func() -> void: mode_chosen.emit(id, Profile.golden_point()))
 		_menu_buttons[id] = b
-		grid.add_child(b)
+		_menu_col.add_child(b)
+	var gap2 := Control.new()
+	gap2.custom_minimum_size = Vector2(0, 14)
+	_menu_col.add_child(gap2)
+	_coins_badge = _label("", 15, LIME)
+	_coins_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var cb := StyleBoxFlat.new()
+	cb.bg_color = Color(0.05, 0.08, 0.15, 0.82)
+	cb.border_color = Color(1, 1, 1, 0.14)
+	cb.set_border_width_all(1)
+	cb.set_corner_radius_all(10)
+	cb.content_margin_left = 14
+	cb.content_margin_right = 14
+	cb.content_margin_top = 6
+	cb.content_margin_bottom = 8
+	_coins_badge.add_theme_stylebox_override("normal", cb)
+	_menu.add_child(_coins_badge)
 	# bottom row: team, AI level, court, stats, settings
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 8)
-	col.add_child(row)
+	row.add_theme_constant_override("separation", 6)
+	_menu_col.add_child(row)
 	for id in ["team", "locker", "ai", "court", "stats", "settings"]:
-		var pb := _button("", 14, Color(1, 1, 1, 0.16), Color.WHITE)
-		pb.custom_minimum_size = Vector2(0, 40)
+		var pb := _button("", 12, Color(1, 1, 1, 0.07), Color.WHITE)
+		for st in ["normal", "hover", "pressed", "focus"]:
+			var sb := pb.get_theme_stylebox(st).duplicate() as StyleBoxFlat
+			sb.border_color = Color(1, 1, 1, 0.18)
+			sb.set_border_width_all(1)
+			sb.set_corner_radius_all(16)
+			sb.content_margin_left = 10
+			sb.content_margin_right = 10
+			sb.content_margin_top = 6
+			sb.content_margin_bottom = 6
+			pb.add_theme_stylebox_override(st, sb)
+		pb.custom_minimum_size = Vector2(0, 34)
 		_pills[id] = pb
 		row.add_child(pb)
 	_pills.team.pressed.connect(func() -> void: show_team(true))
@@ -636,13 +683,20 @@ func refresh_menu() -> void:
 	_pills.locker.text = "Locker%s" % ("  (%d)" % pts if pts > 0 else "")
 	_pills.settings.text = "Settings"
 	var best := Profile.daily_best()
-	_menu_buttons.daily.text = "Daily challenge\n%s" % ("Today's best: %d goals" % best if best > 0 else "Hit the moving goal on the back glass")
+	(_menu_buttons.daily.get_meta("note") as Label).text = "Best today: %d" % best if best > 0 else "Hit the moving goal"
 	var next := ""
 	for v in Roster.VENUES:
 		if not Profile.career_won(v.id):
 			next = "%s · %s" % [v.name, Roster.ROUNDS[Profile.career_round(v.id)]]
 			break
-	_menu_buttons.career.text = "Career\n%s" % (next if next != "" else "World champions! Defend your titles")
+	(_menu_buttons.career.get_meta("note") as Label).text = next if next != "" else "Defend your titles"
+	_coins_badge.text = "Coins\n%d" % Profile.coins()
+
+
+## Your pair, celebrating, as the menu's key art (main.gd builds it).
+func set_hero(hero: MenuHero) -> void:
+	_hero = hero
+	_hero_rect.texture = hero.get_texture()
 
 
 # --- full-screen overlays --------------------------------------------------------
@@ -685,6 +739,74 @@ func _back_button(screen: Control, label := "Back") -> Button:
 func _open(screen: Control) -> void:
 	_menu.visible = false
 	screen.visible = true
+
+
+## One line of the mode list: a big condensed name and a small note after it.
+## The first (the main thing to do) is lit lime.
+func _menu_item(name: String, note: String, lit: bool) -> Button:
+	var b := Button.new()
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(480, 54)
+	var grad := Gradient.new()
+	grad.set_color(0, Color(LIME, 1.0))
+	grad.set_color(1, Color(LIME, 0.0))
+	var gt := GradientTexture2D.new()
+	gt.gradient = grad
+	gt.width = 256
+	gt.height = 4
+	gt.fill_to = Vector2(1, 0)
+	var lit_box := StyleBoxTexture.new()
+	lit_box.texture = gt
+	var plain := StyleBoxFlat.new()
+	plain.bg_color = Color(0, 0, 0, 0)
+	plain.border_color = Color(1, 1, 1, 0.08)
+	plain.border_width_bottom = 1
+	var press := StyleBoxTexture.new()
+	press.texture = gt
+	press.modulate_color = Color(1, 1, 1, 0.55)
+	for st in ["normal", "hover", "focus", "disabled"]:
+		b.add_theme_stylebox_override(st, lit_box if lit else plain)
+	b.add_theme_stylebox_override("pressed", press if not lit else lit_box)
+	b.pressed.connect(func() -> void: Sfx.play_ui())
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = 14
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	var big := _label(name.to_upper(), 33, INK if lit else Color.WHITE)
+	big.add_theme_font_override("font", FONT_DISPLAY)
+	big.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	big.size_flags_vertical = Control.SIZE_FILL
+	row.add_child(big)
+	var small := _label(note, 14, Color(INK, 0.85) if lit else MUTED)
+	small.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	small.size_flags_vertical = Control.SIZE_FILL
+	small.offset_top = 6
+	var holder := MarginContainer.new()
+	holder.add_theme_constant_override("margin_top", 9)
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(small)
+	row.add_child(holder)
+	b.add_child(row)
+	b.set_meta("note", small)
+	return b
+
+
+## The menu's slab and stripes, drawn to fit the screen (see _layout_menu).
+class MenuArt extends Control:
+	var edge := 600.0      # where the slab's top edge ends (x)
+	func _draw() -> void:
+		var h := size.y
+		var slant := h * 0.13
+		var slab := Color("0c1324")
+		draw_colored_polygon(PackedVector2Array([Vector2(0, 0), Vector2(edge, 0), Vector2(edge - slant, h), Vector2(0, h)]), slab)
+		# stripes along the cut: lime and blue bands, thinning out
+		var bands := [[8.0, Hud.LIME, 10.0], [24.0, Color("4fc3f7"), 6.0], [38.0, Hud.LIME, 5.0], [50.0, Color("4fc3f7"), 3.0], [60.0, Hud.LIME, 2.0]]
+		for bd in bands:
+			var x0: float = edge + bd[0]
+			var w: float = bd[2]
+			draw_colored_polygon(PackedVector2Array([Vector2(x0, 0), Vector2(x0 + w, 0), Vector2(x0 + w - slant, h), Vector2(x0 - slant, h)]), bd[1])
 
 
 func _build_longer() -> void:
@@ -1346,6 +1468,7 @@ func _layout() -> void:
 		if win.x > 0 and sa.size.x > 0:
 			var sc := vp / win
 			rect = Rect2(Vector2(sa.position) * sc, Vector2(sa.size) * sc)
+	_layout_menu(vp, rect)
 	rect = rect.grow(-12.0)
 	safe.position = rect.position
 	safe.size = rect.size
@@ -1377,6 +1500,26 @@ func _layout() -> void:
 	_place(combo_btn, Vector2(mx.call(w - 190 * k), h - 172 * k), 48 * k)
 	pause_btn.position = Vector2(w - pause_btn.size.x if lefty else 0.0, 0)
 	_layout_message()
+
+
+## The poster menu: slab width from the screen, list inside the safe area,
+## your pair filling the right-hand side.
+func _layout_menu(vp: Vector2, safe_rect: Rect2) -> void:
+	var left := safe_rect.position.x + 30.0
+	_menu_shade.position = Vector2.ZERO
+	_menu_shade.size = vp
+	_menu_art.position = Vector2.ZERO
+	_menu_art.size = vp
+	_menu_art.edge = clampf(left + 640.0, vp.x * 0.46, vp.x * 0.6)
+	_menu_art.queue_redraw()
+	_menu_col.reset_size()
+	var top := safe_rect.position.y + maxf(16.0, (safe_rect.size.y - _menu_col.size.y) * 0.45)
+	_menu_col.position = Vector2(left, top)
+	var art_left := _menu_art.edge - vp.y * 0.02
+	_hero_rect.position = Vector2(art_left, vp.y * 0.04)
+	_hero_rect.size = Vector2(vp.x - art_left, vp.y * 0.98)
+	_coins_badge.reset_size()
+	_coins_badge.position = Vector2(safe_rect.end.x - _coins_badge.size.x - 18.0, safe_rect.position.y + 14.0)
 
 
 func _place(b: TouchButton, centre: Vector2, half: float) -> void:

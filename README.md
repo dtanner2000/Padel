@@ -6,6 +6,10 @@ First playable slice: a full doubles match against AI, with you and an AI partne
 
 Open the folder in **Godot 4.6** (4.4+ works) and press F5. On desktop, mouse clicks act as touches, and the keyboard works too.
 
+## Start menu
+
+A poster layout: the mode list on a dark slab cut by a diagonal of lime and blue stripes, with your pair celebrating on the right in your own kit (a small 3D scene rendered live into a `SubViewport`, `scripts/menu_hero.gd`, paused when the menu is hidden). Headings use **Anton** and the rest of the UI **Fira Sans** (both SIL Open Font License; licences in `assets/fonts/`). `tools/hero_render.gd` renders the same pair to a transparent PNG for store art.
+
 ## Modes
 
 The start menu (with a live AI match playing behind it) offers:

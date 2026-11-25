@@ -158,6 +158,8 @@ var ch_size := Vector2(4.2, 2.4)
 var goal_frame: Node3D
 var sfx: Sfx
 var scenery: Scenery
+var menu_hero: MenuHero
+var _my_paddle: Array = ["round", Color.BLACK, Color.BLACK]
 # replays: a ring buffer of every frame of the rally, played back slowly after big points
 const REC_SECONDS := 5.0
 const REPLAY_SPEED := 0.45
@@ -264,6 +266,10 @@ func _ready() -> void:
 	_make_machine()
 	hud = Hud.new()
 	add_child(hud)
+	menu_hero = MenuHero.new()
+	add_child(menu_hero)
+	hud.set_hero(menu_hero)
+	_refresh_hero()
 	hud.shot_requested.connect(_on_shot_requested)
 	hud.hit_pressed.connect(_on_hit_pressed)
 	hud.mode_chosen.connect(_on_mode_chosen)
@@ -518,6 +524,8 @@ func _apply_kit() -> void:
 					face = sk[2]
 					trim = sk[3]
 		p.set_paddle(pd.shape, face, trim)
+		if p == players[0]:
+			_my_paddle = [pd.shape, face, trim]
 		p.reach = 1.15
 	var hat: String = Profile.get_v("look", "hat", "")
 	if hat != "" and not Profile.owns("hat_" + hat):
@@ -531,9 +539,27 @@ func _apply_kit() -> void:
 			kit_col = k[2]
 	players[0].set_cosmetics(hat, Roster.PALETTE[int(Profile.get_v("look", "hat_col", 2))], band,
 		kit_col, Roster.character(lineup[0]).get("kit_key", {}))
+	_hero_look = {"hat": hat, "hat_col": Roster.PALETTE[int(Profile.get_v("look", "hat_col", 2))], "band": band,
+		"kit_col": kit_col, "paddle": _my_paddle}
+	_refresh_hero()
 	if _kit_on():
 		players[0].speed *= 1.0 + 0.016 * Profile.skill("speed")
 		players[0].reach = 1.15 + 0.03 * Profile.skill("reach")
+
+
+var _hero_look := {}
+var _hero_shown := ""
+
+
+## The menu's key art: your pair in your kit (only rebuilt when that changes).
+func _refresh_hero() -> void:
+	if menu_hero == null or lineup.size() < 2:
+		return
+	var key := "%s|%s|%s" % [lineup[0], lineup[1], str(_hero_look)]
+	if key == _hero_shown:
+		return
+	_hero_shown = key
+	menu_hero.show_team([lineup[0], lineup[1]], _hero_look)
 
 
 func _kit_on() -> bool:

@@ -101,6 +101,7 @@ func set_look(large: bool, contrast: bool, trail: bool) -> void:
 func place(p: Vector3) -> void:
 	sim.pos = p
 	sim.vel = Vector3.ZERO
+	sim.rolling = false
 	sim.spin = 0.0
 	shown_spin = 0.0
 	position = p

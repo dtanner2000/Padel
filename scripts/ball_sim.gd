@@ -22,6 +22,10 @@ var spin := 0.0
 ## Steady wind on outdoor courts (m/s² of drift). Static so the live ball and
 ## every prediction feel the same wind.
 static var wind := Vector3.ZERO
+## Settled on the floor (bounces too small to matter): it rolls, and the
+## floor event fires once instead of every step. Without this a ball at rest
+## fired a "floor" sound hundreds of times a second: a rough hum.
+var rolling := false
 
 
 func copy() -> BallSim:
@@ -29,6 +33,7 @@ func copy() -> BallSim:
 	s.pos = pos
 	s.vel = vel
 	s.spin = spin
+	s.rolling = rolling
 	return s
 
 
@@ -49,7 +54,21 @@ func step(dt: float) -> Array:
 			events.append(["net", pos, ""])
 
 	# floor
-	if pos.y < RADIUS and vel.y < 0.0:
+	if rolling:
+		if vel.y > 0.5:
+			rolling = false          # struck again
+		elif pos.y <= RADIUS + 0.001:
+			pos.y = RADIUS
+			vel.y = 0.0
+			vel.x *= 1.0 - 1.5 * dt  # rolling resistance
+			vel.z *= 1.0 - 1.5 * dt
+	if not rolling and pos.y < RADIUS and vel.y < 0.0 and vel.y > -0.45:
+		pos.y = RADIUS
+		vel.y = 0.0
+		rolling = true
+		if absf(pos.x) <= Court.HALF_W and absf(pos.z) <= Court.HALF_L:
+			events.append(["floor", pos, ""])
+	elif not rolling and pos.y < RADIUS and vel.y < 0.0:
 		pos.y = RADIUS
 		# backspin: lower bounce that skids through; topspin: kicks up and slows
 		vel.y = -vel.y * FLOOR_E * (1.0 + 0.45 * spin)
