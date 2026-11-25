@@ -3,7 +3,7 @@ extends Node
 ## Sound effects: a small pool of positional players for ball sounds, and a
 ## flat player for the crowd and UI. Muted through Profile's sound setting.
 
-const SOUNDS := ["paddle", "smash", "floor", "glass", "mesh", "net", "squeak", "click", "ding", "buzz", "applause", "applause_big", "whoosh"]
+const SOUNDS := ["paddle", "smash", "floor", "glass", "mesh", "net", "squeak", "click", "ding", "buzz", "applause", "applause_big", "whoosh", "success", "unlock"]
 const POOL := 10
 
 static var instance: Sfx
@@ -12,6 +12,7 @@ var _streams := {}
 var _pool: Array[AudioStreamPlayer3D] = []
 var _next := 0
 var _flat: AudioStreamPlayer
+var _sting: AudioStreamPlayer
 var _crowd: AudioStreamPlayer
 var crowd_level := 0.6     # venue crowd size: 0.5 club .. 1.0 arena
 var log_on := false        # main.gd records ball sounds for the replay
@@ -38,6 +39,8 @@ func _ready() -> void:
 		_pool.append(p)
 	_flat = AudioStreamPlayer.new()
 	add_child(_flat)
+	_sting = AudioStreamPlayer.new()     # success / unlock: never cut off by a click
+	add_child(_sting)
 	_crowd = AudioStreamPlayer.new()
 	add_child(_crowd)
 	_load_voices()
@@ -101,10 +104,13 @@ func voice(pos: Vector3, volume_db := 0.0) -> void:
 
 func ui(sound := "click", volume_db := -4.0) -> void:
 	if _streams.has(sound):
-		_flat.stream = _streams[sound]
-		_flat.volume_db = volume_db
-		_flat.pitch_scale = 1.0
-		_flat.play()
+		var pl := _sting if sound in ["success", "unlock"] else _flat
+		if pl == _sting and _sting.playing and _sting.stream == _streams["success"]:
+			pl = _flat           # an achievement during the success jingle: both play
+		pl.stream = _streams[sound]
+		pl.volume_db = volume_db
+		pl.pitch_scale = 1.0
+		pl.play()
 
 
 ## Applause after a point: bigger for long rallies and big shots.

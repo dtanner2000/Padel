@@ -1190,6 +1190,8 @@ func _challenge_result(goal: bool, reason: String) -> void:
 		state_timer = 4.5
 		_over_at = elapsed
 		sfx.crowd(ch_goals >= 5)
+		if new_best and ch_goals > 0:
+			sfx.ui("success", -3.0)
 		_offer([["Try again", _start_daily], ["Menu", _go_menu]])
 		hud.show_message("%d goal%s%s\nToday's best %d  ·  all-time best %d" % [
 			ch_goals, "" if ch_goals == 1 else "s", "  NEW BEST!" if new_best and ch_goals > 0 else "", best, Profile.stat("daily_best")], 4.5)
@@ -1807,7 +1809,7 @@ func _check_awards() -> void:
 	var fresh := Awards.check({"drills": done, "drills_total": total})
 	if not fresh.is_empty():
 		hud.flash("ACHIEVEMENT: %s%s  +%d coins" % [fresh[0], "  (+%d more)" % (fresh.size() - 1) if fresh.size() > 1 else "", Awards.COINS * fresh.size()], 2.5)
-		sfx.ui("ding", -6.0)
+		sfx.ui("unlock", -3.0)   # achievement
 
 
 ## A fresh gust for each point on outdoor courts (none indoors, in training or online).
@@ -2119,7 +2121,7 @@ func _practice_result(good: bool, reason: String) -> void:
 			hud.show_message("✓ Drill complete!\n%s%s" % [DRILL_INFO[drill_id].name, "\n+1 skill point" if first else ""], 30.0)
 			training.set_value(drill_id, "done", true)
 			training.save(TRAINING_SAVE)
-			sfx.crowd(true)
+			sfx.ui("success", -3.0)
 			_offer_after_drill.call_deferred()
 		else:
 			hud.show_message("%s  ×%d" % [reason, streak], 0.9)
@@ -2251,6 +2253,8 @@ func _award(team: int, reason: String) -> void:
 				if team == mine:
 					Profile.add_stat("online_wins")
 		if career_venue != "":
+			if team == 0 and counted:
+				sfx.ui("success", -4.0)
 			here = _career_result(team == 0)
 			state_timer = 6.0
 		if net_role == "" and counted:
