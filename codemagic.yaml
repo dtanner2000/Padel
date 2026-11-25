@@ -134,6 +134,9 @@ workflows:
           "$GODOT" --headless --path . --export-release "iOS" build/ios/Padel.ipa > export.log 2>&1 || true
           sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' export.log | tail -80
           test -d build/ios/Padel.xcodeproj || { echo "FATAL: xcodeproj was not generated"; exit 1; }
+          # link Google's AdMob / UMP Swift packages (the plugin's own step is deferred and skipped headless)
+          ls build/ios/admob_spm
+          "$GODOT" --headless --path . -s tools/admob_spm_patch.gd -- build/ios/Padel.xcodeproj/project.pbxproj
           xcodebuild -list -project build/ios/Padel.xcodeproj
 
       - name: Sign + build IPA
