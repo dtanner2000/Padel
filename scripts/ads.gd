@@ -14,8 +14,8 @@ const IOS_INTERSTITIAL := "ca-app-pub-4925808836448571/5866076245"
 const IOS_REWARDED := "ca-app-pub-4925808836448571/5319281339"
 ## Android (Google Play): fill in from AdMob > the Android app > Ad units. Empty = Google's
 ## test units (and the codemagic android-play check refuses a build without our app id).
-const ANDROID_INTERSTITIAL := ""
-const ANDROID_REWARDED := ""
+const ANDROID_INTERSTITIAL := "ca-app-pub-4925808836448571/6306943845"
+const ANDROID_REWARDED := "ca-app-pub-4925808836448571/6410438511"
 const TEST_INTERSTITIAL_IOS := "ca-app-pub-3940256099942544/4411468910"
 const TEST_REWARDED_IOS := "ca-app-pub-3940256099942544/1712485313"
 const TEST_INTERSTITIAL_ANDROID := "ca-app-pub-3940256099942544/1033173712"
