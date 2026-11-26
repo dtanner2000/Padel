@@ -18,9 +18,8 @@ func _init():
 		var p := Player.new().setup(0, c.name, 0, Color("f28c28"), c.skin, c.hair, true)
 		p.position = sp[2]
 		root3.add_child(p); p.use_model(load("res://assets/characters/%s.glb" % sp[0]))
-		if sp[0] == "you":
-			p.set_cosmetics("bandana", Color("ff2d95"), Color("ff2d95"), Color("d8ff1a"), c.kit_key)
 		p.set_meta("kind", sp[3])
+		p.set_meta("char", c)
 		ps.append(p)
 	var cam := Camera3D.new(); cam.fov = 36; cam.current = true; root3.add_child(cam)
 	cam.look_at_from_position(Vector3(0.9, 1.35, -4.8), Vector3(0.05, 1.2, 0))
@@ -28,6 +27,11 @@ func _process(d):
 	frames += 1
 	if frames == 2:
 		for p in ps:
+			var c: Dictionary = p.get_meta("char")
+			if c.id == "dani":
+				p.set_cosmetics("bandana", Color("ff2d95"), Color("ff2d95"), Color("d8ff1a"), c.kit_key)
+			else:
+				p.set_cosmetics("headband", Color("f2f2f2"), Color("f2f2f2"), Color("ff2d95"), c.kit_key)
 			p._tag.visible = false
 			p._ring.visible = false
 			p.celebrate(p.get_meta("kind"))
