@@ -3337,7 +3337,10 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		if kind in ["power_smash", "por_cuatro", "power_slice"] and not together:
 			p.smash_charge = 0.0
 		else:
-			p.smash_charge = minf(1.0, p.smash_charge + (2.0 if q > 0.85 else 1.0) / CHARGE_HITS * (1.0 + _kit(p).charge))
+			# adding 1/12ths in floating point can stop a hair short of 1.0 (0.9999999):
+			# the ring looked full but stayed orange and SMASH never armed. Snap it.
+			var c: float = p.smash_charge + (2.0 if q > 0.85 else 1.0) / CHARGE_HITS * (1.0 + _kit(p).charge)
+			p.smash_charge = 1.0 if c >= 0.995 else c
 		var fx := ""
 		if together:
 			fx = "TOGETHER!"
