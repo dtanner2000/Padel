@@ -10,6 +10,7 @@ extends Node3D
 ## Command-line options (after `--`):
 ##   --autoplay        the AI plays your player too (soak test), skips the menu
 ##   --mash            a bot taps HIT for you (tests the human code path)
+##   --mash-kind=K     the bot plays shot K: por_cuatro | power_slice | dejada | globo | vibora | chiquita | contrapared
 ##   --mode=ID         skip the menu: quick | set | match | practice
 ##   --drill=ID        start a training drill: ground | aim | slice | glass | volley | smash | mix
 ##   --daily           start today's daily challenge
@@ -31,7 +32,7 @@ const LATCH_TIME := 1.1             # LOB / SMASH pressed this early still count
 const MOVE_ASSIST := 0.75           # auto-move towards your ball when the stick is idle (0 = off)
 const DEAD_BALL_TIME := 8.0
 const CHARGE_HITS := 12.0           # SMASH charges over ~10-12 hits (perfect timing counts double)
-const SHOT_SPIN := {"slice": -1.0, "lob": -0.2, "drive": 0.15, "smash": 0.1, "power_smash": 0.6,
+const SHOT_SPIN := {"power_slice": -1.8, "slice": -1.0, "lob": -0.2, "drive": 0.15, "smash": 0.1, "power_smash": 0.6,
 	"por_cuatro": 1.6, "dejada": -1.0, "globo": 0.35, "combo": 0.15,
 	"vibora": -0.9, "chiquita": -0.6, "contrapared": 0.0}
 
@@ -56,7 +57,7 @@ const DRILL_INFO := {
 	"por_cuatro": {"name": "Por cuatro", "goal": 3, "z": 4.2, "shot": "por_cuatro",
 		"tip": "SMASH is charged. Hold the stick left or right and tap SMASH\non the high ball: out over the side wall."},
 	"walls": {"name": "Glass targets", "goal": 5, "z": 7.4,
-		"tip": "Land it deep so it bounces up into the lit panel.\nOff the bounce only: glass on the full is out."},
+		"tip": "Land it deep so it bounces up into the lit panel.\nSide panels: aim wide into that corner. Glass on the full is out."},
 	"mix": {"name": "Free practice", "goal": 0, "z": 7.4,
 		"tip": "Everything mixed. How long a streak can you build?"},
 	"challenge": {"name": "Daily challenge", "goal": 0, "z": 7.6, "tip": ""},
@@ -88,6 +89,7 @@ class Pad:
 	var mirror := 1.0
 	var touch := true          # held input comes from the touch HIT button (so flicks mean slice)
 	var side := 0.0            # SMASH swiped sideways: por cuatro to that side (world x sign)
+	var cut := false           # SMASH swiped down: a power slice
 	var latch := 0.0           # LOB / SMASH tapped: wait this long for the ball, whatever HIT is doing
 
 	func world_move() -> Vector3:
@@ -212,7 +214,7 @@ var _orbit_centre := Vector3.ZERO
 var wall_target: Node3D            # "Glass targets" drill: the lit panel
 var _wt_side := 0                  # 0 back glass, -1 / 1 side glass at the far end
 var _wt_centre := Vector2.ZERO     # back: (x, y); side: (z, y)
-const WT_SIZE := Vector2(2.2, 1.3)
+const WT_SIZE := Vector2(2.2, 1.4)
 var _last_move := Vector3.ZERO
 var _squeak_cd := 0.0
 var _over_at := 0.0               # when the match/challenge ended (taps ignored briefly)
@@ -1178,10 +1180,12 @@ func _goal_node(col: Color) -> Node3D:
 # --- glass targets drill --------------------------------------------------------
 
 ## A new lit panel on the far glass: left, middle or right of the back wall,
-## or the back stretch of either side wall.
+## or the back corner of either side wall. Low down, where a ball coming up
+## off the bounce actually meets the glass (tools/wall_target_test.gd: higher
+## panels were lit by one shot in ten, the side ones almost never).
 func _place_wall_target() -> void:
 	var pick := randi() % 5
-	var y := randf_range(0.95, 1.5)
+	var y := randf_range(0.75, 0.9)
 	if pick < 3:
 		_wt_side = 0
 		_wt_centre = Vector2((pick - 1) * 3.2, y)
@@ -1189,7 +1193,7 @@ func _place_wall_target() -> void:
 		wall_target.rotation.y = 0.0
 	else:
 		_wt_side = -1 if pick == 3 else 1
-		_wt_centre = Vector2(-Court.HALF_L + 1.6, y)
+		_wt_centre = Vector2(-Court.HALF_L + 1.15, y)
 		wall_target.position = Vector3(_wt_side * (Court.HALF_W - 0.07), y, _wt_centre.x)
 		wall_target.rotation.y = PI * 0.5
 	wall_target.visible = true
@@ -1944,7 +1948,7 @@ func _maybe_replay(team: int, reason: String) -> void:
 	if not Profile.replays() or net_role != "" or _ai_human() or practice or _rec.size() < 30:
 		return
 	_since_replay += 1
-	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
+	var special := last_shot_kind in ["power_smash", "power_slice", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
 	var epic := (rally_hits >= 20 or reason == "Out of the court!") and _since_replay >= 4
 	if special or epic:
 		_since_replay = 0
@@ -2051,7 +2055,7 @@ func _pick_reactions(team: int, mid: Vector3) -> Dictionary:
 			out[p] = ["five", mid]
 	else:
 		for p in winners:
-			var big := _celeb_res == "set" or _celeb_shot in ["por_cuatro", "power_smash", "combo"] or _celeb_reason == "Out of the court!"
+			var big := _celeb_res == "set" or _celeb_shot in ["por_cuatro", "power_smash", "power_slice", "combo"] or _celeb_reason == "Out of the court!"
 			var opts := ["jump", "pump", "twirl"] if big else (["nod", "pump"] if _celeb_res == "game" else ["jump", "pump"])
 			if arena and big:
 				opts.append("crowd")
@@ -2080,7 +2084,7 @@ func _pick_reactions(team: int, mid: Vector3) -> Dictionary:
 			else:
 				out[mate] = [pick.call(["sad", "hips"]), null]
 	else:
-		var stunned := _celeb_shot in ["por_cuatro", "power_smash", "contrapared", "vibora", "combo", "dejada", "globo"] or _celeb_reason == "Out of the court!"
+		var stunned := _celeb_shot in ["por_cuatro", "power_smash", "power_slice", "contrapared", "vibora", "combo", "dejada", "globo"] or _celeb_reason == "Out of the court!"
 		var clapper := -1
 		if rally_hits >= 12 and randf() < 0.6:
 			clapper = randi() % maxi(1, losers.size())
@@ -2413,7 +2417,7 @@ func _award(team: int, reason: String) -> void:
 		_ooh_at = elapsed
 		sfx.react("ooh")
 	scenery.cheer(1.0 if big else 0.4)
-	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
+	var special := last_shot_kind in ["power_smash", "power_slice", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
 	if special or res in ["game", "set", "match"] or rally_hits >= 12 or (reason == "Out of the court!" and team == last_hitter_team):
 		_celeb_team = team
 		_celeb_match = res == "match"
@@ -2515,7 +2519,7 @@ func _fault() -> void:
 func _on_floor(pos: Vector3) -> void:
 	if state != State.RALLY:
 		return
-	if receiver_bounces == 0 and last_shot_kind in ["power_smash", "por_cuatro", "smash"] and Court.side_of(pos.z) != last_hitter_team:
+	if receiver_bounces == 0 and last_shot_kind in ["power_smash", "por_cuatro", "power_slice", "smash"] and Court.side_of(pos.z) != last_hitter_team:
 		_impact(pos)
 		_shake = maxf(_shake, 0.18 if last_shot_kind == "smash" else 0.3)
 	var side := Court.side_of(pos.z)
@@ -2771,6 +2775,9 @@ func _physics_process(delta: float) -> void:
 	elif mash_kind == "por_cuatro" and Engine.get_physics_frames() % 15 == 0:
 		_on_shot_requested("smash", Vector2.ZERO)
 		_on_shot_requested("smash_side", Vector2(1.0, 0.0))
+	elif mash_kind == "power_slice" and Engine.get_physics_frames() % 15 == 0:
+		_on_shot_requested("smash", Vector2.ZERO)
+		_on_shot_requested("smash_side", Vector2(randf_range(-0.4, 0.4), -1.0))
 	elif mash_kind == "dejada" and Engine.get_physics_frames() % 15 == 0:
 		_on_shot_requested("chiquita", Vector2(0.0, -1.0))
 	elif mash_kind == "globo" and Engine.get_physics_frames() % 15 == 0:
@@ -3209,10 +3216,17 @@ func _pad_pressed(pad: Pad, p: Player) -> void:
 
 func _pad_shot(pad: Pad, kind: String, aim: Vector2) -> void:
 	if kind == "smash_side":
-		# SMASH, then a sideways swipe before letting go: por cuatro that way
-		if absf(aim.x) < 0.4:
+		# SMASH, then a swipe before letting go: sideways = por cuatro that
+		# way, down = a power slice
+		if aim.y <= -0.45 and absf(aim.y) > absf(aim.x):
+			pad.cut = true
+			pad.side = 0.0
+			pad.aim = Vector2(clampf(aim.x, -1.0, 1.0), 0.6)
+		elif absf(aim.x) < 0.4:
 			return
-		pad.side = signf(pad.world_aim(aim).x)
+		else:
+			pad.cut = false
+			pad.side = signf(pad.world_aim(aim).x)
 		if pad.kind != "smash" or pad.buffer <= 0.0:
 			pad.kind = "smash"
 			pad.buffer = LATCH_TIME
@@ -3220,6 +3234,7 @@ func _pad_shot(pad: Pad, kind: String, aim: Vector2) -> void:
 		return
 	if kind == "smash":
 		pad.side = 0.0
+		pad.cut = false
 	if kind == "drive" and pad.held_fired:
 		pad.held_fired = false   # this release belongs to a shot already played
 		return
@@ -3268,7 +3283,9 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 			# With the stick held sideways it's a por cuatro (out over the side wall).
 			if p.smash_charge >= 1.0 and bp.y > 1.6:
 				var side := pad.side if pad.side != 0.0 else (signf(pad.world_move().x) if absf(pad.world_move().x) > 0.55 else 0.0)
-				if side != 0.0 and _shot_ok(p, "por_cuatro"):
+				if pad.cut:
+					kind = "power_slice"
+				elif side != 0.0 and _shot_ok(p, "por_cuatro"):
 					kind = "por_cuatro"
 					pad.aim = Vector2(side * pad.mirror, 0.0)   # world_aim() turns it back into world x
 				else:
@@ -3300,14 +3317,15 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		pad.buffer = 0.0
 		pad.latch = 0.0
 		pad.side = 0.0
+		pad.cut = false
 		pad.held_fired = held
 		var miss := maxf(0.0, (0.7 - q) * 0.6) + _difficulty(p) * 0.12
-		if kind in ["power_smash", "por_cuatro"]:
+		if kind in ["power_smash", "por_cuatro", "power_slice"]:
 			miss *= 0.5
 		if together:
 			miss = 0.0
 		_do_hit(p, kind, pad.world_aim(pad.aim), q, miss)
-		if kind in ["power_smash", "por_cuatro"] or together:
+		if kind in ["power_smash", "por_cuatro", "power_slice"] or together:
 			_hitstop(0.075, 0.4)
 		elif q > 0.85:
 			_hitstop(0.035, 0.08)
@@ -3316,7 +3334,7 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		if together:
 			for o in _team(1 - p.team):
 				o.react = 2.2          # wrong-footed: they don't move until it's past them
-		if kind in ["power_smash", "por_cuatro"] and not together:
+		if kind in ["power_smash", "por_cuatro", "power_slice"] and not together:
 			p.smash_charge = 0.0
 		else:
 			p.smash_charge = minf(1.0, p.smash_charge + (2.0 if q > 0.85 else 1.0) / CHARGE_HITS * (1.0 + _kit(p).charge))
@@ -3325,6 +3343,8 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 			fx = "TOGETHER!"
 		elif kind == "power_smash":
 			fx = "POWER SMASH!"
+		elif kind == "power_slice":
+			fx = "POWER SLICE!"
 		elif kind in Roster.SHOTS:
 			fx = Roster.SHOTS[kind].name.to_upper() + "!"
 		elif not was_full and p.smash_charge >= 1.0:
@@ -3338,7 +3358,7 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		elif kind == "slice":
 			fx = "SLICE"
 		if p == _human() and not _ai_human():
-			if kind == "power_smash":
+			if kind in ["power_smash", "power_slice"]:
 				Profile.add_stat("power_smashes")
 			elif fx == "BAJADA!":
 				Profile.add_stat("bajadas")
@@ -3356,6 +3376,11 @@ func _tick_controlled(p: Player, pad: Pad, delta: float) -> void:
 		else:
 			if fx != "":
 				hud.flash(fx)
+			if fx == "SMASH READY!" and not practice and not challenge and Profile.get_v("hints", "power_slice", 0) < 2:
+				# the first couple of times: how to use it
+				Profile.set_v("hints", "power_slice", int(Profile.get_v("hints", "power_slice", 0)) + 1)
+				Profile.save()
+				hud.show_message("SMASH is charged: tap it on a high ball.\nSwipe down on it for a POWER SLICE.", 2.6)
 			Profile.vibrate(ms)
 
 
@@ -3414,6 +3439,11 @@ func _shot_target(kind: String, aim: Vector2, s: float, q: float) -> Array:
 			to = Vector3(aim.x * 3.5, r, -s * lerpf(3.0, 6.0, depth))
 			speed = lerpf(20.0, 27.0, q)
 			clear = 0.1
+		"power_slice":
+			# cut hard and deep with heavy backspin: skids low and dies off the glass
+			to = Vector3(aim.x * 3.6, r, -s * lerpf(6.2, 7.8, depth))
+			speed = lerpf(22.0, 27.0, q)
+			clear = 0.1
 		"power_smash", "por_cuatro":
 			# lands near the service line with topspin: kicks up and over the back wall
 			to = Vector3(aim.x * 3.0, r, -s * lerpf(2.8, 4.4, depth))
@@ -3454,7 +3484,9 @@ func _shot_target(kind: String, aim: Vector2, s: float, q: float) -> Array:
 			speed = 19.0
 			clear = 0.22
 		_:
-			to = Vector3(aim.x * 3.8, r, -s * lerpf(3.0, 8.6, depth))
+			# glass targets drill: you can aim right into the corners
+			var reach := 4.6 if practice and _drill() == "walls" else 3.8
+			to = Vector3(aim.x * reach, r, -s * lerpf(3.0, 8.6, depth))
 			speed = lerpf(10.0, 18.0, q * 0.6 + depth * 0.4)
 	return [to, speed, clear, depth]
 
@@ -3471,7 +3503,7 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 	# bajada: a well-timed ball taken off your own back glass comes out with extra pace
 	if wall_since_bounce and q >= 0.7 and kind == "drive":
 		speed += 3.5
-	if _style(p) == "Power" and kind in ["drive", "smash", "power_smash"]:
+	if _style(p) == "Power" and kind in ["drive", "smash", "power_smash", "power_slice"]:
 		speed += 1.5
 	if kind in ["drive", "smash", "power_smash", "vibora"]:
 		speed += _kit(p).power
@@ -3502,15 +3534,15 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 	last_hit_volley = receiver_bounces == 0
 	if trace:
 		print("[hit] t=%.1f %s %s from=%s to=%s q=%.2f b=%d" % [elapsed, p.display_name, kind, from.snapped(Vector3.ONE * 0.1), to.snapped(Vector3.ONE * 0.1), q, receiver_bounces])
-	var hard := kind in ["smash", "power_smash"]
-	sfx.at("smash" if hard else "paddle", from, (2.0 if kind == "power_smash" else 0.0) if hard else clampf(speed * 0.35 - 6.0, -6.0, 0.0))
+	var hard := kind in ["smash", "power_smash", "power_slice"]
+	sfx.at("smash" if hard else "paddle", from, (2.0 if kind in ["power_smash", "power_slice"] else 0.0) if hard else clampf(speed * 0.35 - 6.0, -6.0, 0.0))
 	p.swing(kind)
-	if kind in ["power_smash", "por_cuatro", "smash", "combo"]:
+	if kind in ["power_smash", "por_cuatro", "power_slice", "smash", "combo"]:
 		ball.burst(0.9)
 	p.hit_cooldown = 0.4
 	_last_hit_at = _rec_total
 	# a smash dug out and sent back: the crowd goes "ooh"
-	if last_hitter_team != p.team and last_shot_kind in ["power_smash", "smash", "por_cuatro"] and rally_hits > 1 and elapsed - _ooh_at > 6.0:
+	if last_hitter_team != p.team and last_shot_kind in ["power_smash", "power_slice", "smash", "por_cuatro"] and rally_hits > 1 and elapsed - _ooh_at > 6.0:
 		_ooh_at = elapsed
 		sfx.react("ooh")
 	last_hitter_p = p

@@ -729,9 +729,9 @@ func swing(kind := "drive") -> void:
 	last_swing = kind
 	var t := _new_swing()
 	match kind:
-		"smash", "power_smash", "bandeja", "vibora":
+		"smash", "power_smash", "power_slice", "bandeja", "vibora":
 			_pose_tween(t, POSE_UP, 0.07)
-			_pose_tween(t, POSE_OVER, 0.12 if kind in ["smash", "power_smash"] else 0.16, Tween.TRANS_QUAD, Tween.EASE_IN)
+			_pose_tween(t, POSE_OVER, 0.12 if kind in ["smash", "power_smash", "power_slice"] else 0.16, Tween.TRANS_QUAD, Tween.EASE_IN)
 		"serve", "lob", "contrapared":
 			_pose_tween(t, POSE_UNDER_BACK, 0.08)
 			_pose_tween(t, POSE_UNDER_THROUGH, 0.16)
