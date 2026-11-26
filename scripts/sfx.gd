@@ -14,6 +14,8 @@ var _next := 0
 var _flat: AudioStreamPlayer
 var _sting: AudioStreamPlayer
 var _crowd: AudioStreamPlayer
+var _react: AudioStreamPlayer
+var _reacts := {}            # "ooh" | "groan" -> [AudioStream]: assets/sfx/crowd_ooh*.ogg, crowd_groan*.ogg
 var crowd_level := 0.6     # venue crowd size: 0.5 club .. 1.0 arena
 var log_on := false        # main.gd records ball sounds for the replay
 var log: Array = []        # [sound, pos, volume_db] since last read
@@ -43,6 +45,8 @@ func _ready() -> void:
 	add_child(_sting)
 	_crowd = AudioStreamPlayer.new()
 	add_child(_crowd)
+	_react = AudioStreamPlayer.new()
+	add_child(_react)
 	_load_voices()
 	apply_settings()
 
@@ -79,11 +83,21 @@ func _load_voices() -> void:
 	var seen := {}
 	for f in dir.get_files():
 		f = f.trim_suffix(".import").trim_suffix(".remap")
-		if f.begins_with("voice_") and (f.ends_with(".ogg") or f.ends_with(".wav")) and not seen.has(f):
-			seen[f] = true
-			var r := load("res://assets/sfx/" + f)
-			if r:
-				_voices.append(r)
+		if not (f.ends_with(".ogg") or f.ends_with(".wav")) or seen.has(f):
+			continue
+		seen[f] = true
+		for kind: String in ["voice", "crowd_ooh", "crowd_groan"]:
+			if f.begins_with(kind):
+				var r := load("res://assets/sfx/" + f)
+				if r == null:
+					continue
+				if kind == "voice":
+					_voices.append(r)
+				else:
+					var k: String = kind.trim_prefix("crowd_")
+					if not _reacts.has(k):
+						_reacts[k] = []
+					_reacts[k].append(r)
 
 
 func voice(pos: Vector3, volume_db := 0.0) -> void:
@@ -123,6 +137,21 @@ func crowd(big := false) -> void:
 		if _duck and _duck.is_valid():
 			_duck.kill()
 		_crowd.play()
+
+
+## The crowd reacting: "ooh" (a great get, a ball out of the court) or
+## "groan" (a long rally thrown away). Louder in bigger venues; silent when
+## the clips aren't there.
+func react(kind: String) -> void:
+	var list: Array = _reacts.get(kind, [])
+	if list.is_empty():
+		return
+	_react.stream = list[randi() % list.size()]
+	_react.volume_db = linear_to_db(clampf(crowd_level, 0.05, 1.0)) - 3.0
+	_react.pitch_scale = randf_range(0.96, 1.04)
+	_react.play()
+	if kind == "groan" and _crowd.playing:
+		duck_crowd(0.3)
 
 
 ## Fade the crowd out (a replay is starting).

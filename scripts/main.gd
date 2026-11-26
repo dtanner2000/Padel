@@ -196,6 +196,15 @@ var _last_together := false        # the combo shot is in play this point
 var _choice_default := Callable()  # what HIT does while the end-of-match buttons are up
 var _celeb_team := -1              # team to celebrate once any replay has played
 var _celeb_match := false
+var _celeb_reason := ""            # why the celebrated point ended ("Into the net", "Double bounce"…)
+var _celeb_res := ""               # what it won: point | game | set | match
+var _celeb_hitter: Player = null   # who struck the ball last on that point
+var _celeb_shot := ""              # and with what
+var _celeb_kinds := {}             # Player -> [kind, face]: each player's reaction this time
+var last_hitter_p: Player = null   # the player who struck the ball last
+var _ooh_at := -10.0               # the crowd's last "ooh" (elapsed)
+## Points lost by the side that hit the ball last: an error, not a winner.
+const ERRORS := ["Into the net", "Out", "Hit the glass on the full", "Into the fence", "Double fault"]
 var _celeb_cam := -1               # team the camera is showing celebrating (-1: normal camera)
 var _orbit_t := -1.0               # >= 0: circling the winners after a match
 var _orbit_a0 := 0.0
@@ -2012,11 +2021,78 @@ func _end_replay() -> void:
 		_orbit_centre = _team_centre(_celeb_won)
 		for p in players:
 			if p.visible:
-				p.celebrate("jump" if p.team == _celeb_won else "sad")
+				var pick: Array = _celeb_kinds.get(p, ["jump" if p.team == _celeb_won else "sad", null])
+				p.celebrate(pick[0], pick[1])
 
 
-## The winners celebrate (a high five and jumps after a match, otherwise a
-## jump or a fist pump); the other side hangs their heads. The camera comes
+## Each player's reaction to the point: [kind, face point or null] (see
+## Player.celebrate()). Winners: a high five or chest bump after a match, a
+## partner pointing at whoever hit the winner, a twirl or a roar to the
+## crowd on a big one, just a nod for a plain game. Losers: whoever made the
+## error is angry or has their head in their hands, and their partner may
+## throw their arms out at them (and get a shrug back); beaten by a great
+## shot they stand hands on hips, or applaud it after a long rally; a lost
+## match leaves them hands on knees.
+func _pick_reactions(team: int, mid: Vector3) -> Dictionary:
+	var out := {}
+	var winners := _team(team).filter(func(p: Player) -> bool: return p.visible)
+	var losers := _team(1 - team).filter(func(p: Player) -> bool: return p.visible)
+	var pick := func(options: Array) -> String: return options[randi() % options.size()]
+	# --- winners
+	var together := winners.size() == 2
+	var by_shot := _celeb_hitter != null and _celeb_hitter.team == team and not _celeb_reason in ERRORS
+	var arena := sfx.crowd_level >= 0.75
+	if _celeb_match and together:
+		var k: String = pick.call(["five", "chest"])
+		for p in winners:
+			out[p] = [k, mid]
+	elif _celeb_five and together:
+		for p in winners:
+			out[p] = ["five", mid]
+	else:
+		for p in winners:
+			var big := _celeb_res == "set" or _celeb_shot in ["por_cuatro", "power_smash", "combo"] or _celeb_reason == "Out of the court!"
+			var opts := ["jump", "pump", "twirl"] if big else (["nod", "pump"] if _celeb_res == "game" else ["jump", "pump"])
+			if arena and big:
+				opts.append("crowd")
+			out[p] = [pick.call(opts), null]
+		# the partner points at whoever hit the winner
+		if together and by_shot and _celeb_hitter in winners and randf() < 0.5:
+			out[_partner(_celeb_hitter)] = ["point", _celeb_hitter.position]
+	for p in winners:
+		if out[p][0] == "crowd":
+			var sx := signf(p.position.x) if absf(p.position.x) > 0.3 else 1.0
+			out[p] = ["crowd", p.position + Vector3(sx * 6.0, 0, 0)]
+	# --- losers
+	if _celeb_match:
+		for i in losers.size():
+			out[losers[i]] = ["slump" if i == 0 or randf() < 0.5 else "sad", null]
+		return out
+	var culprit: Player = _celeb_hitter if _celeb_hitter in losers and _celeb_reason in ERRORS else null
+	if culprit:
+		out[culprit] = [pick.call(["angry", "head", "angry", "sad"]), null]
+		var mate := _partner(culprit)
+		if mate in losers:
+			if randf() < 0.45:
+				out[mate] = ["blame", culprit.position]
+				if randf() < 0.5:
+					out[culprit] = ["shrug", mate.position]
+			else:
+				out[mate] = [pick.call(["sad", "hips"]), null]
+	else:
+		var stunned := _celeb_shot in ["por_cuatro", "power_smash", "contrapared", "vibora", "combo", "dejada", "globo"] or _celeb_reason == "Out of the court!"
+		var clapper := -1
+		if rally_hits >= 12 and randf() < 0.6:
+			clapper = randi() % maxi(1, losers.size())
+		for i in losers.size():
+			if i == clapper and not winners.is_empty():
+				out[losers[i]] = ["applaud", winners[0].position]
+			else:
+				out[losers[i]] = [pick.call(["hips", "head"] if stunned else ["sad", "hips"]), null]
+	return out
+
+
+## The winners celebrate and the other side reacts (see _pick_reactions()). The camera comes
 ## round in front of the winners, or circles them after a match.
 func _start_celebration() -> void:
 	var team := _celeb_team
@@ -2025,22 +2101,20 @@ func _start_celebration() -> void:
 	# partners come together (on a line across the court), then celebrate
 	var mid := _team_centre(team)
 	mid.z = Court.team_sign(team) * clampf(absf(mid.z), 3.0, 7.5)
+	_celeb_kinds = _pick_reactions(team, mid)
 	for i in players.size():
 		var p := players[i]
-		if not p.visible:
+		if not p.visible or not _celeb_kinds.has(p):
 			continue
-		if p.team != team:
-			p.celebrate("sad")
-			continue
-		var together := _partner(p).visible
-		var side := signf(p.position.x - _partner(p).position.x)
-		if side == 0.0:
-			side = 1.0 if i % 2 == 0 else -1.0
-		var meet: Variant = Vector3(mid.x + side * 0.5, 0.0, mid.z) if together else null
-		if (_celeb_match or _celeb_five) and together:
-			p.celebrate("five", mid, meet)
-		else:
-			p.celebrate("jump" if randf() < 0.5 else "pump", null, meet)
+		var pick: Array = _celeb_kinds[p]
+		var kind: String = pick[0]
+		var meet: Variant = null
+		if p.team == team and kind in ["five", "chest", "jump", "pump"] and _partner(p).visible:
+			var side := signf(p.position.x - _partner(p).position.x)
+			if side == 0.0:
+				side = 1.0 if i % 2 == 0 else -1.0
+			meet = Vector3(mid.x + side * (0.36 if kind == "chest" else 0.5), 0.0, mid.z)
+		p.celebrate(kind, pick[1], meet)
 	_celeb_cam = team
 	_celeb_at = elapsed
 	# a shout from the winners ("yes!", a whoop): from the nearest of them
@@ -2051,7 +2125,10 @@ func _start_celebration() -> void:
 	if shouter:
 		sfx.voice(shouter.position + Vector3(0, 1.6, 0))
 	if quit_after > 0.0:
-		print("[celebrate] t=%.1f team %d" % [elapsed, team])
+		var names := []
+		for p in _celeb_kinds:
+			names.append("%s:%s" % [p.display_name, _celeb_kinds[p][0]])
+		print("[celebrate] t=%.1f team %d %s/%s %s" % [elapsed, team, _celeb_res, _celeb_reason, " ".join(names)])
 	scenery.cheer(1.0)
 	if _celeb_match:
 		_orbit_t = 0.0
@@ -2164,6 +2241,7 @@ func _serve(srv: Player, aim: Vector2) -> void:
 	sfx.at("paddle", ball.sim.pos, -3.0)
 	serve_in_play = true
 	last_hitter_team = srv.team
+	last_hitter_p = srv
 	last_shot_kind = "serve"
 	receiver_bounces = 0
 	since_hit = 0.0
@@ -2327,12 +2405,22 @@ func _award(team: int, reason: String) -> void:
 	stats.reasons[reason] = stats.reasons.get(reason, 0) + 1
 	var res := score.point_won(team)
 	var big := rally_hits >= 8 or reason == "Out of the court!" or res in ["set", "match"]
-	sfx.crowd(big)
+	if reason in ERRORS and rally_hits >= 5 and res == "point":
+		sfx.react("groan")         # so close: a long rally thrown away
+	else:
+		sfx.crowd(big)
+	if reason == "Out of the court!" and elapsed - _ooh_at > 2.0:
+		_ooh_at = elapsed
+		sfx.react("ooh")
 	scenery.cheer(1.0 if big else 0.4)
 	var special := last_shot_kind in ["power_smash", "vibora", "contrapared", "chiquita", "por_cuatro", "dejada", "globo", "combo"] and team == last_hitter_team
-	if special or res in ["set", "match"] or (reason == "Out of the court!" and team == last_hitter_team):
+	if special or res in ["game", "set", "match"] or rally_hits >= 12 or (reason == "Out of the court!" and team == last_hitter_team):
 		_celeb_team = team
 		_celeb_match = res == "match"
+		_celeb_reason = reason
+		_celeb_res = res
+		_celeb_hitter = last_hitter_p
+		_celeb_shot = last_shot_kind
 	_celeb_five = _last_together and team == 0
 	_last_together = false
 	_maybe_replay(team, reason)   # after the celebration (it waits for it)
@@ -3421,6 +3509,11 @@ func _do_hit(p: Player, kind: String, aim: Vector2, q: float, miss_chance := 0.0
 		ball.burst(0.9)
 	p.hit_cooldown = 0.4
 	_last_hit_at = _rec_total
+	# a smash dug out and sent back: the crowd goes "ooh"
+	if last_hitter_team != p.team and last_shot_kind in ["power_smash", "smash", "por_cuatro"] and rally_hits > 1 and elapsed - _ooh_at > 6.0:
+		_ooh_at = elapsed
+		sfx.react("ooh")
+	last_hitter_p = p
 	last_hitter_team = p.team
 	last_shot_kind = kind
 	receiver_bounces = 0

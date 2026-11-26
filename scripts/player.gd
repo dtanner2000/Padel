@@ -47,6 +47,8 @@ const FIST_Y := 0.045       # where the hand closes on the handle, from the grip
 const PALM := 0.06          # wrist bone -> centre of the (shrunk) palm, along the forearm
 const HAND_SHRINK := 0.55   # the model's open paddle hand, tucked inside the fist
 var _off_hand: Node3D
+var _off_elbow: Node3D
+var paddle_spin := 0.0     # a twirl: the paddle turns about its handle (radians)
 var _knee_l: Node3D
 var _knee_r: Node3D
 
@@ -60,7 +62,7 @@ const MODEL_BONES := ["Spine01", "LeftArm", "LeftForeArm", "LeftHand", "RightArm
 var _run_phase := 0.0
 var _swinging := false
 var replaying := false     # a replay is posing the rig: skip the live animation
-var celebrate_kind := ""   # "" | "jump" | "pump" | "five" | "sad": after a big point
+var celebrate_kind := ""   # see celebrate(): after a big point
 var _celeb_t := 0.0
 var _celeb_yaw := 0.0
 var _meet: Variant = null   # Vector3: jog here first (partners come together), then celebrate
@@ -100,6 +102,34 @@ static var POSE_PUMP_LOW := _arm_pose(Vector3(0.45, -0.25, -0.85), Vector3(0.05,
 static var POSE_PUMP_HIGH := _arm_pose(Vector3(0.35, 0.95, -0.3), Vector3(0.15, 1, -0.15))
 static var POSE_FIVE := _arm_pose(Vector3(0.05, 1, -0.6), Vector3(-0.1, 1, -0.45))         # reaching up and forward
 static var POSE_HANG := _arm_pose(Vector3(0.15, -1, 0.05), Vector3(0.05, -1, -0.3))         # arm hanging, paddle down
+# reactions (paddle arm; OFF_* are the free arm, mirrored)
+static var POSE_SLAP_UP := _arm_pose(Vector3(0.35, -0.7, -0.45), Vector3(0.3, 0.45, -0.85))   # paddle raised in front...
+static var POSE_SLAP_DOWN := _arm_pose(Vector3(0.22, -1, 0.05), Vector3(0.12, -1, 0.2))      # ...slapped down on the thigh
+static var POSE_HEAD := _arm_pose(Vector3(0.8, 0.5, -0.15), Vector3(-0.8, 0.5, 0.1))         # hand on the head
+static var POSE_OPEN := _arm_pose(Vector3(0.55, -0.6, -0.55), Vector3(0.5, 0.0, -0.85))      # arms out: "what was that?"
+static var POSE_SHRUG := _arm_pose(Vector3(0.4, -0.9, -0.15), Vector3(0.65, 0.15, -0.75))
+static var POSE_HIPS := _arm_pose(Vector3(0.7, -0.7, 0.2), Vector3(-0.55, -0.6, 0.3))        # hand on the hip
+static var POSE_TAP := _arm_pose(Vector3(0.1, -0.6, -0.8), Vector3(-0.3, 0.4, -0.85))        # paddle face up in front
+static var POSE_KNEE := _arm_pose(Vector3(0.15, -1, -0.45), Vector3(0.05, -1, -0.35))          # hands on knees
+static var POSE_POINT := _arm_pose(Vector3(0.12, 0.15, -1), Vector3(0.08, 0.2, -1))          # pointing straight ahead
+static var POSE_TWIRL := _arm_pose(Vector3(0.45, -0.35, -0.8), Vector3(0.1, 0.9, -0.4))      # paddle up in front, spinning
+static var POSE_BUMP := _arm_pose(Vector3(0.55, -0.55, 0.6), Vector3(0.45, -0.5, 0.75))      # arms back, chest out
+static var OFF_HANG := _off_pose(Vector3(0.15, -1, 0.05), Vector3(0.05, -1, -0.2))
+static var OFF_HEAD := _off_pose(Vector3(0.8, 0.5, -0.15), Vector3(-0.8, 0.5, 0.1))
+static var OFF_OPEN := _off_pose(Vector3(0.55, -0.6, -0.55), Vector3(0.5, 0.0, -0.85))
+static var OFF_SHRUG := _off_pose(Vector3(0.4, -0.9, -0.15), Vector3(0.65, 0.15, -0.75))
+static var OFF_HIPS := _off_pose(Vector3(0.7, -0.7, 0.2), Vector3(-0.55, -0.6, 0.3))
+static var OFF_KNEE := _off_pose(Vector3(0.15, -1, -0.45), Vector3(0.05, -1, -0.35))
+static var OFF_BUMP := _off_pose(Vector3(0.55, -0.55, 0.6), Vector3(0.45, -0.5, 0.75))
+static var OFF_CLAP_A := _off_pose(Vector3(0.15, -0.6, -0.8), Vector3(-0.35, 0.35, -0.85))  # free hand clapping on the strings
+static var OFF_CLAP_B := _off_pose(Vector3(0.2, -0.6, -0.75), Vector3(-0.6, 0.3, -0.7))
+static var OFF_FIST := _off_pose(Vector3(0.35, 0.95, -0.3), Vector3(0.15, 1, -0.15))
+
+
+## The free (left) arm's version of a pose written for the paddle arm: the
+## same shape, mirrored across the body.
+static func _off_pose(upper: Vector3, fore: Vector3) -> Array:
+	return _arm_pose(Vector3(-upper.x, upper.y, upper.z), Vector3(-fore.x, fore.y, fore.z))
 
 
 ## [shoulder Quaternion, elbow bend] that points the upper arm along `upper`
@@ -413,8 +443,15 @@ func _apply(desired: Vector3, delta: float) -> void:
 
 # --- celebrations ----------------------------------------------------------------
 
-## kind: "jump" | "pump" | "five" (turn to `face` and reach for a high five,
-## then jump) | "sad" (the losing side: shoulders down). face: world point.
+## Winners: "jump" | "pump" | "five" (turn to `face`, reach for a high five,
+## then jump) | "chest" (a chest bump with the partner at `face`) | "point"
+## (point at the partner who hit the winner) | "crowd" (fist up to the stands
+## at `face`) | "twirl" (spin the paddle) | "nod" (a small fist: "come on").
+## Losers: "sad" (head down) | "angry" (paddle slapped on the thigh, a kick) |
+## "head" (both hands on the head) | "blame" (arms out at the partner at
+## `face`) | "shrug" | "hips" (hands on hips, staring) | "applaud" (paddle
+## tap: good shot) | "slump" (hands on knees, after losing the match).
+## face: world point to turn to.
 func celebrate(kind: String, face: Variant = null, meet: Variant = null) -> void:
 	celebrate_kind = kind
 	_tag.visible = false             # the camera comes in close: no name tags
@@ -470,8 +507,24 @@ func stop_celebrating() -> void:
 	_body.position.y = 0.0
 	_body.rotation = Vector3.ZERO
 	_off_shoulder.rotation = Vector3(0.1, 0, -0.25)
+	_off_elbow.rotation.x = 0.7
 	_shoulder.quaternion = POSE_READY[0]
 	_elbow.rotation.x = POSE_READY[1]
+	_legs(0.0, 0.0)
+	_torso.rotation.x = 0.0
+	paddle_spin = 0.0
+
+
+## Lean the upper body at the waist (negative = forwards).
+func _lean(x: float, k: float) -> void:
+	_torso.rotation.x = lerpf(_torso.rotation.x, x, k)
+	_body.rotation.x = lerpf(_body.rotation.x, 0.0, k)
+
+
+func _off_to(pose: Array, delta: float, rate := 12.0) -> void:
+	var k := 1.0 - exp(-rate * delta)
+	_off_shoulder.quaternion = _off_shoulder.quaternion.slerp(pose[0], k)
+	_off_elbow.rotation.x = lerpf(_off_elbow.rotation.x, pose[1], k)
 
 
 func _arm_to(pose: Array, delta: float, rate := 12.0) -> void:
@@ -494,7 +547,17 @@ func _celebrate_tick(delta: float) -> void:
 	var kind := celebrate_kind
 	if kind == "five" and t > 1.25:
 		kind = "jump"
+	if kind == "chest" and t > 1.3:
+		kind = "jump"
+	if kind == "twirl" and t > 1.6:
+		kind = "jump"
+	if kind == "point" and t > 1.4:
+		kind = "pump"
 	var off_k := 1.0 - exp(-10.0 * delta)
+	if kind in ["jump", "pump", "five", "sad", "crowd", "point", "twirl", "nod", "angry"]:
+		_off_elbow.rotation.x = lerpf(_off_elbow.rotation.x, 0.5, off_k)
+	if kind != "twirl":
+		paddle_spin = lerpf(paddle_spin, roundf(paddle_spin / TAU) * TAU, off_k)
 	match kind:
 		"jump":
 			# bounce on the spot, paddle and free arm up
@@ -524,11 +587,117 @@ func _celebrate_tick(delta: float) -> void:
 		"sad":
 			# head down, paddle hanging, a slow shake of the head (body sway)
 			_body.position.y = lerpf(_body.position.y, -0.03, off_k)
-			_body.rotation.x = lerpf(_body.rotation.x, -0.3, off_k * 0.5)
+			_lean(-0.32, off_k * 0.5)
 			_body.rotation.z = 0.05 * sin(t * 1.3)
 			_legs(0.12, -0.25, 0.05)
 			_arm_to(POSE_HANG, delta, 5.0)
 			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(-0.05, 0, -0.08), off_k * 0.5)
+		"angry":
+			# three hard slaps of the paddle on the thigh, a shake of the head,
+			# then a kick at the floor
+			var slap := fposmod(t, 0.42) / 0.42
+			var slapping := t < 1.3
+			_arm_to(POSE_SLAP_UP if slapping and slap < 0.55 else POSE_SLAP_DOWN, delta, 22.0 if slap >= 0.55 else 9.0)
+			_lean(-0.28, off_k)
+			_body.rotation.z = 0.09 * sin(t * 11.0) * clampf(1.6 - t, 0.0, 1.0)
+			_body.position.y = lerpf(_body.position.y, -0.04, off_k)
+			var kick := maxf(0.0, sin(clampf((t - 1.35) / 0.4, 0.0, 1.0) * PI))
+			_hip_l.rotation = Vector3(0.1, 0.0, -0.07)
+			_hip_r.rotation = Vector3(0.1 + 0.9 * kick, 0.0, 0.07)
+			_knee_l.rotation.x = -0.2
+			_knee_r.rotation.x = -0.2 - 0.5 * kick
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(0.2, 0, -0.35), off_k)
+		"head":
+			# both hands to the head, then a slow turn away
+			_arm_to(POSE_HEAD, delta, 8.0)
+			_off_to(OFF_HEAD, delta, 8.0)
+			_lean(0.15, off_k * 0.6)
+			_body.rotation.z = 0.04 * sin(t * 1.6)
+			_legs(0.08, -0.15, 0.08)
+			if t > 0.9:
+				_celeb_yaw += delta * 0.9
+		"blame":
+			# turn to your partner, arms out, a little bob on each "what?"
+			var bob := absf(sin(t * TAU * 1.3))
+			_arm_to(POSE_OPEN, delta, 10.0)
+			_off_to(OFF_OPEN, delta, 10.0)
+			_body.position.y = -0.03 + 0.05 * bob
+			_lean(-0.1 - 0.12 * bob, off_k)
+			_legs(0.15, -0.3, 0.1)
+		"shrug":
+			# shoulders up, palms out, back down
+			var up := maxf(0.0, sin(clampf(fposmod(t, 1.3) / 0.7, 0.0, 1.0) * PI))
+			_arm_to(POSE_SHRUG, delta, 10.0)
+			_off_to(OFF_SHRUG, delta, 10.0)
+			_body.position.y = 0.05 * up
+			_body.rotation.z = 0.08 * up
+			_legs(0.06, -0.12, 0.08)
+		"hips":
+			# hands on hips, leaning back to stare at the glass
+			_arm_to(POSE_HIPS, delta, 8.0)
+			_off_to(OFF_HIPS, delta, 8.0)
+			_lean(0.16, off_k * 0.5)
+			_body.rotation.z = lerpf(_body.rotation.z, 0.05, off_k * 0.5)
+			_legs(0.05, -0.1, 0.12)
+		"applaud":
+			# paddle up, free hand tapping the strings: good shot
+			var tap := fposmod(t, 0.38) / 0.38
+			_arm_to(POSE_TAP, delta, 10.0)
+			_off_to(OFF_CLAP_A if tap < 0.5 else OFF_CLAP_B, delta, 20.0)
+			_lean(-0.1, off_k)
+			_legs(0.1, -0.2, 0.08)
+		"slump":
+			# hands on knees, head down, a long breath
+			var breath := 0.5 + 0.5 * sin(t * 2.4)
+			_body.position.y = lerpf(_body.position.y, -0.12, off_k * 0.6)
+			_lean(-0.75 - 0.05 * breath, off_k * 0.6)
+			_legs(0.55, -0.85, 0.12)
+			_arm_to(POSE_KNEE, delta, 6.0)
+			_off_to(OFF_KNEE, delta, 6.0)
+		"chest":
+			# step in and jump into your partner, chest first, arms back
+			var hop := maxf(0.0, sin(clampf((t - 0.35) / 0.5, 0.0, 1.0) * PI))
+			_body.position.y = 0.32 * hop
+			_lean(0.32 * hop, 1.0 - exp(-20.0 * delta))
+			_legs(0.2 + 0.4 * hop, -0.4 - 0.7 * hop)
+			_arm_to(POSE_BUMP, delta, 14.0)
+			_off_to(OFF_BUMP, delta, 14.0)
+		"point":
+			# point at your partner: "that's yours, that one"
+			var jab := maxf(0.0, sin(clampf(fposmod(t, 0.7) / 0.35, 0.0, 1.0) * PI))
+			_arm_to(POSE_POINT, delta, 14.0)
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(0.3, 0, -0.3), off_k)
+			_lean(-0.12 * jab, off_k)
+			_body.position.y = -0.03
+			_legs(0.2, -0.4, 0.1)
+		"crowd":
+			# turn to the stands, fist up, roar
+			var pump := 0.5 + 0.5 * sin(t * TAU * 1.4)
+			_arm_to(POSE_PUMP_HIGH, delta, 14.0)
+			_off_to(OFF_FIST, delta, 10.0)
+			_lean(0.2 * pump, off_k)
+			_body.position.y = -0.05 + 0.04 * pump
+			_legs(0.3, -0.55, 0.14)
+		"twirl":
+			# paddle up in front, a couple of spins, catch it
+			_arm_to(POSE_TWIRL, delta, 12.0)
+			if t > 0.25 and t < 1.2:
+				paddle_spin += delta * 15.0
+			elif t >= 1.2:
+				paddle_spin = lerpf(paddle_spin, ceilf(paddle_spin / TAU) * TAU, 1.0 - exp(-14.0 * delta))
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(0.4, 0, -0.35), off_k)
+			_body.position.y = -0.02
+			_legs(0.12, -0.25, 0.1)
+		"nod":
+			# a small fist at the waist and a nod: "come on"
+			var nod := maxf(0.0, sin(clampf(fposmod(t, 1.1) / 0.45, 0.0, 1.0) * PI))
+			_arm_to(POSE_PUMP_LOW, delta, 12.0)
+			_off_shoulder.rotation = _off_shoulder.rotation.lerp(Vector3(0.3, 0, -0.3), off_k)
+			_lean(-0.2 * nod, 1.0 - exp(-16.0 * delta))
+			_body.position.y = -0.04
+			_legs(0.25, -0.5, 0.1)
+	if kind in ["jump", "pump", "five", "shrug", "twirl"]:
+		_torso.rotation.x = lerpf(_torso.rotation.x, 0.0, off_k)
 	_torso.rotation.y = lerpf(_torso.rotation.y, 0.0, off_k)
 
 
@@ -735,6 +904,7 @@ func _build() -> void:
 	_part(_off_shoulder, _capsule(0.06, 0.32), Vector3(0, -0.14, 0), shirt)   # sleeve
 	var off_elbow := _joint(_off_shoulder, Vector3(0, -0.28, 0))
 	off_elbow.rotation.x = 0.7      # forearm forwards (positive bends towards the front)
+	_off_elbow = off_elbow
 	_part(off_elbow, _capsule(0.05, 0.3), Vector3(0, -0.13, 0), skin)
 	_off_hand = _joint(off_elbow, Vector3(0, -0.28, 0))
 
@@ -941,6 +1111,25 @@ func _aim_limb(upper: String, lower: String, end: String, mid_world: Vector3, en
 	return lg * _skel.get_bone_rest(e).origin
 
 
+## The model's spine bends at the waist with the procedural torso (a
+## reaction leaning forward or back); upright otherwise.
+func _bend_spine() -> void:
+	var sp: int = _bones.get("Spine01", -1)
+	if sp < 0:
+		return
+	var bend := _torso.rotation.x
+	if absf(bend) < 0.001:
+		_skel.set_bone_pose_rotation(sp, _skel.get_bone_rest(sp).basis.get_rotation_quaternion())
+		return
+	var par := _skel.get_bone_parent(sp)
+	var parent_g := _skel.get_bone_global_pose(par) if par >= 0 else Transform3D()
+	var g := parent_g * _skel.get_bone_rest(sp)
+	var axis := (_skel.global_basis.inverse() * _torso.global_basis.x).normalized()
+	g.basis = Basis(axis, bend) * g.basis
+	var local := parent_g.affine_inverse() * g
+	_skel.set_bone_pose_rotation(sp, local.basis.get_rotation_quaternion())
+
+
 ## Rotate bone `i` (rest pose under `parent_g`) so it points at `target`
 ## (skeleton space); writes its local rotation and returns its new global pose.
 func _aim_one(i: int, child: int, parent_g: Transform3D, target: Vector3) -> Transform3D:
@@ -959,6 +1148,7 @@ func _aim_one(i: int, child: int, parent_g: Transform3D, target: Vector3) -> Tra
 
 func _drive_model() -> void:
 	_update_hair_clip()
+	_bend_spine()
 	var wrist: Variant = _aim_limb("RightArm", "RightForeArm", "RightHand", _elbow.global_position, _hand.global_position)
 	var wrist_l: Variant = _aim_limb("LeftArm", "LeftForeArm", "LeftHand", _off_hand.get_parent_node_3d().global_position, _off_hand.global_position)
 	if wrist_l != null and _band_off and _band_off.visible:
@@ -970,6 +1160,8 @@ func _drive_model() -> void:
 	if wrist != null:
 		var along := (_hand.global_position - _elbow.global_position).normalized()
 		var basis := _paddle_basis(along)
+		if paddle_spin != 0.0:
+			basis = Basis(basis.y, paddle_spin) * basis
 		var palm := _skel.global_transform * (wrist as Vector3) + along * PALM
 		_grip.global_basis = basis
 		_grip.global_position = palm - basis.y * FIST_Y   # the handle runs through the palm
