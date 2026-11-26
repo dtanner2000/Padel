@@ -3,6 +3,7 @@
 #
 #   ios-testflight : Godot exports the Xcode project on a cloud Mac → signed IPA → TestFlight
 #   android-apk    : signed release APK to sideload for playtesting (no Gradle, no plugins)
+#   android-play   : signed AAB for Google Play (Gradle, with AdMob + Play Billing)
 #
 # BEFORE FIRST BUILD (one-time, in the Codemagic web UI, on the *Padel* app):
 #   1. Integration: reuses the team-level App Store Connect key "JPA ASC Key" (already set up
@@ -259,4 +260,154 @@ workflows:
 
     artifacts:
       - build/android/*.apk
+      - export.log
+
+  # ── ANDROID → Google Play (AAB, with AdMob + Play Billing) ─────────────────────────────────
+  # Proven pattern from JPA's android-play workflow. Play needs an AAB, and Godot only makes one
+  # through a GRADLE build; the AdMob and GodotIap addons only link their Android libraries
+  # (EditorExportPlugin _get_android_libraries / _get_android_dependencies) in a Gradle build.
+  # Upload key: the team's jpa_keystore (Play App Signing re-signs with its own app key, and one
+  # upload key may serve several apps). Swap in a padel-specific keystore here if you make one.
+  android-play:
+    name: Android -> Google Play (AAB)
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+
+    environment:
+      android_signing:
+        - jpa_keystore
+      vars:
+        GODOT_VERSION: 4.6.3-stable
+        GODOT_URL: https://github.com/godotengine/godot-builds/releases/download
+        GODOT: /Users/builder/Downloads/Godot.app/Contents/MacOS/Godot
+        PRESET: Android Play
+        OUT: build/padel-play.aab
+
+    cache:
+      cache_paths:
+        - $CM_BUILD_DIR/.godot
+        - $HOME/.gradle
+
+    scripts:
+      - name: Install Godot + export templates
+        working_directory: /Users/builder/Downloads
+        script: |
+          set -e
+          curl -fsSL "$GODOT_URL/$GODOT_VERSION/Godot_v${GODOT_VERSION}_macos.universal.zip" -o godot.zip
+          unzip -q godot.zip && rm godot.zip
+          "$GODOT" --version
+          curl -fsSL "$GODOT_URL/$GODOT_VERSION/Godot_v${GODOT_VERSION}_export_templates.tpz" -o tpl.tpz
+          unzip -q tpl.tpz && rm tpl.tpz
+          TVER=$(echo "$GODOT_VERSION" | sed 's/-/./')
+          DEST="$HOME/Library/Application Support/Godot/export_templates/$TVER"
+          mkdir -p "$DEST" && mv templates/* "$DEST"/
+          echo "TVER=$TVER" >> "$CM_ENV"
+          echo "TPL_DEST=$DEST" >> "$CM_ENV"
+          test -f "$DEST/android_source.zip" \
+            || { echo "FATAL: android_source.zip missing — cannot do a Gradle build."; exit 1; }
+
+      # Project > Install Android Build Template has no headless equivalent (godotengine/godot#38327);
+      # this reproduces exactly what the editor does (see JPA's workflow for the derivation).
+      - name: Install the Android build template
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          rm -rf android
+          mkdir -p android/build
+          printf '%s\n' "$TVER" > android/.build_version
+          printf '\n' > android/build/.gdignore
+          unzip -q -o "$TPL_DEST/android_source.zip" -d android/build
+          test -f android/build/build.gradle || { echo "FATAL: android_source.zip did not unpack"; ls -la android/build; exit 1; }
+          chmod +x android/build/gradlew 2>/dev/null || true
+
+      - name: Point Godot at the Android SDK + JDK 17
+        script: |
+          set -e
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          test -n "$SDK" || { echo "FATAL: no Android SDK on this builder"; exit 1; }
+          echo "ANDROID_HOME=$SDK" >> "$CM_ENV"
+          JH=$(/usr/libexec/java_home -v 17 2>/dev/null || echo "${JAVA_HOME:-}")
+          test -n "$JH" || { echo "FATAL: no JDK 17 and no JAVA_HOME"; exit 1; }
+          echo "JAVA_HOME=$JH" >> "$CM_ENV"
+          DIR="$HOME/Library/Application Support/Godot"
+          mkdir -p "$DIR"
+          for ES in "$DIR/editor_settings-4.tres" "$DIR/editor_settings-4.6.tres"; do
+            {
+              printf '%s\n' '[gd_resource type="EditorSettings" format=3]'
+              printf '\n'
+              printf '%s\n' '[resource]'
+              printf 'export/android/android_sdk_path = "%s"\n' "$SDK"
+              printf 'export/android/java_sdk_path = "%s"\n' "$JH"
+            } > "$ES"
+          done
+
+      - name: Wire the upload keystore
+        script: |
+          set -e
+          if [ -z "$CM_KEYSTORE_PATH" ]; then
+            echo "FATAL: no keystore. Codemagic > Code signing identities > Android keystores."
+            exit 1
+          fi
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$CM_KEYSTORE_PATH" >> "$CM_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$CM_KEY_ALIAS" >> "$CM_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$CM_KEY_PASSWORD" >> "$CM_ENV"
+          echo "--- upload key wired (alias: $CM_KEY_ALIAS)"
+
+      - name: Set version code + import resources
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          sed -i '' "s|^version/code=.*|version/code=$PROJECT_BUILD_NUMBER|" export_presets.cfg
+          grep -E "^(version/code|version/name|package/unique_name)=" export_presets.cfg
+          # (the first import lets the AdMob plugin download its Android binaries)
+          "$GODOT" --headless --path . --import || true
+          "$GODOT" --headless --path . --import || true
+          for f in addons/admob/android/bin/ads/libs/poing-godot-admob-ads-release.aar \
+                   addons/admob/android/bin/ads/libs/poing-godot-admob-core-release.aar \
+                   addons/godot-iap/android/GodotIap.release.aar; do
+            test -f "$f" && echo "    OK      $f" || { echo "FATAL: missing $f"; exit 1; }
+          done
+
+      - name: Godot export (AAB via Gradle)
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          mkdir -p build
+          "$GODOT" --headless --path . --export-release "$PRESET" "$OUT" > export.log 2>&1 || true
+          sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' export.log | tail -120
+          # godotengine/godot#100689: an AAB export can report success and write no file.
+          test -f "$OUT" || { echo "FATAL: no AAB produced — see export.log above."; exit 1; }
+
+      # An AAB's manifest is protobuf with plain UTF-8 strings, so it can be grepped. A build that
+      # failed to link the plugins installs and plays perfectly and earns nothing; fail it here.
+      - name: Verify the bundle and the plugins
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          echo "--- AAB size: $(( $(stat -f%z "$OUT") / 1024 / 1024 )) MB"
+          unzip -l "$OUT" | awk '/base\/lib\/.*\.so$/ {print $4}' | tee libs.txt
+          grep -q 'base/lib/arm64-v8a/' libs.txt || { echo "FATAL: no arm64-v8a libraries"; exit 1; }
+          M=$(mktemp)
+          unzip -p "$OUT" base/manifest/AndroidManifest.xml > "$M"
+          APPID=$(sed -n 's/^general\/android\/app_id="\(.*\)"/\1/p' project.godot)
+          : > missing.txt
+          while IFS='|' read -r NEEDLE LABEL; do
+            if grep -aq "$NEEDLE" "$M"; then echo "    OK      $LABEL"
+            else echo "    MISSING $LABEL"; echo "$LABEL" >> missing.txt; fi
+          done <<CHECKS
+          com.google.android.gms.ads.APPLICATION_ID|AdMob app id declared
+          ${APPID:-no-app-id-in-project-godot}|the app id is ours, not Google's test one
+          com.google.android.gms.permission.AD_ID|Ad ID permission (the real Mobile Ads SDK merged)
+          android.permission.INTERNET|INTERNET permission
+          com.android.vending.BILLING|Play Billing permission (GodotIap linked)
+          CHECKS
+          test ! -s missing.txt || { echo "FATAL: plugins not linked"; exit 1; }
+          if grep -aq "_CONFIGURATION_ERROR" "$M"; then
+            echo "FATAL: AdMob reported missing libraries:"; grep -ao "[A-Za-z_]*_CONFIGURATION_ERROR" "$M" | sort -u
+            exit 1
+          fi
+          echo "--- bundle verified"
+
+    artifacts:
+      - build/*.aab
       - export.log

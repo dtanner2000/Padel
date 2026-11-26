@@ -10,7 +10,7 @@ config_version=5
 
 [admob]
 
-general/android/enabled=false
+general/android/enabled=true
 general/ios/app_id="ca-app-pub-4925808836448571~6624110797"
 
 [animation]
@@ -32,6 +32,10 @@ config/icon="res://icon.svg"
 
 general/ios/mix_with_others=true
 
+[autoload]
+
+GodotIapPlugin="*res://addons/godot-iap/godot_iap.gd"
+
 [display]
 
 window/size/viewport_width=1280
@@ -42,7 +46,7 @@ window/handheld/orientation=4
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/admob/plugin.cfg")
+enabled=PackedStringArray("res://addons/admob/plugin.cfg", "res://addons/godot-iap/plugin.cfg")
 
 [gui]
 

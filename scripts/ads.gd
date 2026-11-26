@@ -12,6 +12,10 @@ const USE_TEST_ADS := false
 
 const IOS_INTERSTITIAL := "ca-app-pub-4925808836448571/5866076245"
 const IOS_REWARDED := "ca-app-pub-4925808836448571/5319281339"
+## Android (Google Play): fill in from AdMob > the Android app > Ad units. Empty = Google's
+## test units (and the codemagic android-play check refuses a build without our app id).
+const ANDROID_INTERSTITIAL := ""
+const ANDROID_REWARDED := ""
 const TEST_INTERSTITIAL_IOS := "ca-app-pub-3940256099942544/4411468910"
 const TEST_REWARDED_IOS := "ca-app-pub-3940256099942544/1712485313"
 const TEST_INTERSTITIAL_ANDROID := "ca-app-pub-3940256099942544/1033173712"
@@ -80,11 +84,14 @@ func _start_sdk() -> void:
 
 func _unit(kind: String) -> String:
 	var ios := OS.get_name() == "iOS"
-	if USE_TEST_ADS or not ios:
+	var live := IOS_INTERSTITIAL if kind == "inter" else IOS_REWARDED
+	if not ios:
+		live = ANDROID_INTERSTITIAL if kind == "inter" else ANDROID_REWARDED
+	if USE_TEST_ADS or live == "":
 		if kind == "inter":
 			return TEST_INTERSTITIAL_IOS if ios else TEST_INTERSTITIAL_ANDROID
 		return TEST_REWARDED_IOS if ios else TEST_REWARDED_ANDROID
-	return IOS_INTERSTITIAL if kind == "inter" else IOS_REWARDED
+	return live
 
 
 func _load_interstitial() -> void:
